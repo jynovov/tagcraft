@@ -1,0 +1,4 @@
+# 本项目只用 Python 标准库，没有任何第三方依赖。
+# 这个文件留空是故意的：方便 pip install -r requirements.txt 不报错。
+#
+# 运行环境要求：Python 3.10 或更高版本。

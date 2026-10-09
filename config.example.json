@@ -1,0 +1,9 @@
+{
+  "_说明": "把这个文件复制成 config.json 后填好自己的信息。config.json 只在你自己电脑上，不会被提交到任何地方。",
+  "api_base": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "",
+  "model": "deepseek-chat",
+  "timeout": 120,
+  "proxy": "",
+  "port": 8848
+}

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · 中文转 tag</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">中文转 tag</h1>
+      <span class="head-right">
+        <span id="dictStatus" class="pill">词表加载中…</span>
+      </span>
+    </div>
+
+    <div class="layout">
+      <!-- 左：输入 -->
+      <div class="col">
+        <div class="card">
+          <div class="card-title">描述画面</div>
+          <textarea id="inputText" rows="8" placeholder="用中文描述你想画的画面，可以写很长"></textarea>
+          <div class="row">
+            <label class="inline">上限
+              <input id="maxTags" type="number" min="10" max="80" value="40">
+            </label>
+            <input id="extraRules" type="text" placeholder="额外要求（可留空）" style="flex:1;min-width:140px">
+          </div>
+          <div class="row">
+            <button id="btnGenerate" class="primary">生成 tag</button>
+            <button id="btnClear" class="ghost">清空</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">查词</div>
+          <div class="row" style="margin-top:0">
+            <input id="searchInput" type="text" placeholder="中文或英文" style="flex:1">
+            <select id="searchCat" style="width:auto">
+              <option value="all">全部</option>
+              <option value="0">常规</option>
+              <option value="1">画师</option>
+              <option value="3">作品</option>
+              <option value="4">角色</option>
+              <option value="5">元数据</option>
+            </select>
+            <button id="btnSearch">搜索</button>
+          </div>
+          <div id="searchResults" class="list"></div>
+        </div>
+      </div>
+
+      <!-- 右：结果 -->
+      <div class="col">
+        <div class="card">
+          <div class="card-title">
+            结果
+            <span class="spacer"></span>
+            <button id="btnSort" class="small ghost">排序</button>
+            <button id="btnDedup" class="small ghost">去重</button>
+            <button id="btnValidate" class="small ghost">校验</button>
+          </div>
+          <div id="notes" class="notes"></div>
+
+          <div class="group">
+            <div class="group-title">质量词 <span id="qCount" class="count">0</span></div>
+            <div id="qTags" class="tags"></div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">正向 tag <span id="posCount" class="count">0</span></div>
+            <div id="posTags" class="tags"></div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">未识别 <span id="unkCount" class="count">0</span></div>
+            <div id="unkTags" class="unk-list"></div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">负向 tag <span id="negCount" class="count">0</span></div>
+            <div id="negTags" class="tags"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">输出</div>
+
+          <label>质量词</label>
+          <textarea id="outQuality" rows="2" class="mono"></textarea>
+          <div class="row">
+            <button id="btnCopyQuality" class="small">复制质量词</button>
+            <button id="btnCopyAll" class="small primary">复制完整正向</button>
+            <label class="inline" style="margin-left:auto">
+              <input id="useWeight" type="checkbox"> 权重语法
+            </label>
+          </div>
+
+          <label style="margin-top:14px">正向 tag</label>
+          <textarea id="outPos" rows="4" class="mono"></textarea>
+          <div class="row"><button id="btnCopyPos" class="small">复制正向</button></div>
+
+          <label style="margin-top:14px">负向 tag</label>
+          <textarea id="outNeg" rows="3" class="mono"></textarea>
+          <div class="row"><button id="btnCopyNeg" class="small">复制负向</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

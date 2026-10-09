@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · 设置</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">设置</h1>
+      <span class="head-right"><span id="dictStatus" class="pill">词表加载中…</span></span>
+    </div>
+
+    <div style="max-width:820px;display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="card-title">大模型</div>
+        <div class="field">
+          <label>接口地址（OpenAI 兼容）</label>
+          <input id="apiBase" class="mono" placeholder="https://api.deepseek.com/v1/chat/completions">
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>模型名</label>
+            <input id="model" class="mono" placeholder="deepseek-chat">
+          </div>
+          <div class="field">
+            <label>温度（0.2 稳 / 0.9 活）</label>
+            <input id="temperature" type="number" min="0" max="1.5" step="0.1" value="0.6">
+          </div>
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input id="apiKey" type="password" class="mono" placeholder="sk-…">
+        </div>
+        <div class="row">
+          <button id="btnSave" class="primary">保存</button>
+          <button id="btnTest">测试连接</button>
+          <span id="testMsg" class="page-sub"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">生成默认值</div>
+        <div class="field" style="max-width:220px">
+          <label>正向 tag 上限</label>
+          <input id="maxTags" type="number" min="10" max="80" value="40">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          系统提示词
+          <span class="spacer"></span>
+          <button id="btnResetPrompt" class="small ghost">恢复默认</button>
+        </div>
+        <textarea id="systemPrompt" rows="16" class="mono"></textarea>
+        <div class="row">
+          <button id="btnSavePrompt" class="primary">保存提示词</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">词表</div>
+        <div class="row" style="margin-top:0">
+          <select id="dictSource" style="flex:1"></select>
+          <button id="btnUpdateDict">更新词表</button>
+        </div>
+        <div id="dictInfo" class="page-sub" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="settings.js"></script>
+</body>
+</html>

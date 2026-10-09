@@ -1,0 +1,101 @@
+/* 设置页 */
+
+const $ = (id) => document.getElementById(id);
+let defaultPrompt = '';
+
+async function loadStatus() {
+  const st = await api('/api/status');
+  defaultPrompt = st.system_prompt || '';
+  const d = st.dict || {};
+  $('dictStatus').textContent = '词表 ' + (d.count || 0).toLocaleString() + ' 条';
+  $('dictInfo').textContent =
+    '当前：' + (d.source || '未知') + (d.updated ? ' · 更新于 ' + d.updated : '') +
+    ' · 共 ' + (d.count || 0).toLocaleString() + ' 条';
+  $('dictStatus').title = d.source || '';
+
+  if (st.sources && !$('dictSource').options.length) {
+    $('dictSource').innerHTML = st.sources.map(s =>
+      `<option value="${s.key}"${s.key === st.default_source ? ' selected' : ''}>${s.label}</option>`).join('');
+  }
+  const saved = localStorage.getItem(LS_PROMPT);
+  $('systemPrompt').value = saved || defaultPrompt;
+}
+
+function fill() {
+  const s = loadSettings();
+  $('apiBase').value = s.apiBase || '';
+  $('model').value = s.model || '';
+  $('apiKey').value = s.apiKey || '';
+  $('temperature').value = s.temperature || 0.6;
+  $('maxTags').value = s.maxTags || 40;
+}
+
+function collect() {
+  return {
+    apiBase: $('apiBase').value.trim(),
+    model: $('model').value.trim(),
+    apiKey: $('apiKey').value.trim(),
+    temperature: $('temperature').value,
+    maxTags: +$('maxTags').value || 40
+  };
+}
+
+function init() {
+  renderSidebar('set');
+  fill();
+  loadStatus().catch(e => toast(e.message, true));
+
+  $('btnSave').addEventListener('click', () => {
+    saveSettings(collect());
+    localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+    toast('已保存');
+  });
+
+  $('btnSavePrompt').addEventListener('click', () => {
+    localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+    toast('提示词已保存');
+  });
+
+  $('btnResetPrompt').addEventListener('click', () => {
+    $('systemPrompt').value = defaultPrompt;
+    localStorage.removeItem(LS_PROMPT);
+    toast('已恢复默认提示词');
+  });
+
+  $('btnTest').addEventListener('click', async () => {
+    const s = collect();
+    $('testMsg').textContent = '测试中…';
+    try {
+      const r = await api('/api/llm/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api: { api_base: s.apiBase, api_key: s.apiKey, model: s.model } })
+      });
+      $('testMsg').textContent = '连接正常 · ' + (r.reply || 'ok');
+      toast('连接正常');
+    } catch (e) {
+      $('testMsg').textContent = '失败';
+      toast(e.message, true);
+    }
+  });
+
+  $('btnUpdateDict').addEventListener('click', async () => {
+    const b = $('btnUpdateDict');
+    b.disabled = true; b.textContent = '下载中…';
+    toast('正在下载词表，请看进度日志');
+    try {
+      const r = await api('/api/dict/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: $('dictSource').value })
+      });
+      toast(r.ok ? '词表已更新：' + (r.count || 0).toLocaleString() + ' 条'
+                 : '下载失败，已回退内置词表', !r.ok);
+      await loadStatus();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      b.disabled = false; b.textContent = '更新词表';
+    }
+  });
+}
+
+document.addEventListener('DOMContentLoaded', init);

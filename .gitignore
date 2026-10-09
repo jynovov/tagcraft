@@ -1,0 +1,26 @@
+# ---- 运行时生成的大文件（不要提交）----
+# 词表数据库 55MB、两份 CSV 18MB，都是脚本解析生成的一次性产物，
+# 首次启动会自动从上游下载并重建，所以仓库里不需要它们。
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/*.csv
+!data/seed_tags.csv
+data/*.log
+
+# ---- 本地配置（可能含 API Key）----
+config.json
+launcher.ini
+
+# ---- 临时 / 调试文件 ----
+launcher.log
+*.log
+__pycache__/
+*.py[cod]
+_o.txt
+_e.txt
+_acceptance_test.py
+_final_test.py
+
+# ---- 依赖文件属性才生效的文件夹图标配置，clone 后不会起作用 ----
+desktop.ini

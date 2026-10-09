@@ -1,0 +1,26 @@
+# 统一换行处理。
+# 特别注意 *.bat：cmd.exe 解析带 LF 换行的批处理会出错，必须锁定 CRLF。
+* text=auto
+
+*.bat         text eol=crlf
+*.cmd         text eol=crlf
+*.py          text eol=lf
+*.js          text eol=lf
+*.html        text eol=lf
+*.css         text eol=lf
+*.md          text eol=lf
+*.json        text eol=lf
+*.cs          text eol=lf
+*.txt         text eol=lf
+*.csv         text eol=lf
+LICENSE       text eol=lf
+.gitignore    text eol=lf
+.gitattributes text eol=lf
+
+# 二进制文件（避免 git 做行尾转换或文本 diff）
+*.exe    binary
+*.ico    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.sqlite binary
