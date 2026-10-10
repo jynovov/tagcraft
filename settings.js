@@ -28,6 +28,12 @@ function fill() {
   $('apiKey').value = s.apiKey || '';
   $('temperature').value = s.temperature || 0.6;
   $('maxTags').value = s.maxTags || 40;
+
+  const c = loadComfy();
+  $('comfyUrl').value = c.url || 'http://127.0.0.1:8188';
+  $('comfyWorkflow').value = c.workflow || '';
+  $('comfyPosNode').value = c.positiveNode || '';
+  $('comfyNegNode').value = c.negativeNode || '';
 }
 
 function collect() {
@@ -37,6 +43,20 @@ function collect() {
     apiKey: $('apiKey').value.trim(),
     temperature: $('temperature').value,
     maxTags: +$('maxTags').value || 40
+  };
+}
+
+function collectComfy() {
+  const wf = $('comfyWorkflow').value.trim();
+  if (wf) {
+    try { JSON.parse(wf); }
+    catch (e) { throw new Error('工作流 JSON 有问题：' + e.message); }
+  }
+  return {
+    url: $('comfyUrl').value.trim() || 'http://127.0.0.1:8188',
+    workflow: wf,
+    positiveNode: $('comfyPosNode').value.trim(),
+    negativeNode: $('comfyNegNode').value.trim()
   };
 }
 
@@ -74,6 +94,29 @@ function init() {
       toast('连接正常');
     } catch (e) {
       $('testMsg').textContent = '失败';
+      toast(e.message, true);
+    }
+  });
+
+  $('btnComfySave').addEventListener('click', () => {
+    try {
+      saveComfy(collectComfy());
+      toast('ComfyUI 配置已保存');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+
+  $('btnComfyTest').addEventListener('click', async () => {
+    let url;
+    try { url = collectComfy().url; } catch (e) { toast(e.message, true); return; }
+    $('comfyMsg').textContent = '测试中…';
+    try {
+      const r = await api('/api/comfy/ping?url=' + encodeURIComponent(url));
+      $('comfyMsg').textContent = '连接正常 · ComfyUI ' + r.version + (r.device ? ' · ' + r.device : '');
+      toast('ComfyUI 连接正常');
+    } catch (e) {
+      $('comfyMsg').textContent = '连不上';
       toast(e.message, true);
     }
   });

@@ -1,4 +1,4 @@
-/* 三页共用：侧边栏、接口调用、提示、本地存储、质量词规则 */
+/* 三页共用：侧边栏、接口调用、提示、本地存储、质量词规则、预设、收藏、ComfyUI 配置 */
 
 /* 与后端 QUALITY_TAGS 保持一致：这些是模型侧美学词，不是 Danbooru tag */
 const QUALITY_TAGS = new Set([
@@ -10,9 +10,20 @@ const QUALITY_TAGS = new Set([
   'score_9', 'score_8_up', 'score_7_up', 'score_6_up', 'score_5_up', 'score_4_up'
 ]);
 
+/* 一键预设：都核对过确实存在（质量词是模型美学词，不是 Danbooru tag） */
+const QUALITY_PRESET = ['masterpiece', 'best_quality', 'absurdres', 'very_aesthetic'];
+const NEG_BASE = ['worst_quality', 'low_quality', 'normal_quality', 'blurry',
+                  'jpeg_artifacts', 'watermark', 'signature', 'english_text'];
+const NEG_ANATOMY = ['extra_arms', 'extra_legs', 'extra_digits', 'fewer_digits',
+                     'extra_eyes', 'extra_ears', 'conjoined', 'long_neck',
+                     'multiple_views', 'bad_anatomy', 'bad_proportions', 'bad_hands',
+                     'bad_feet', 'disfigured', 'cropped', 'out_of_frame'];
+
 const LS_SETTINGS = 'tagcraft.settings';
 const LS_HISTORY = 'tagcraft.history';
 const LS_PROMPT = 'tagcraft.prompt';
+const LS_FAVS = 'tagcraft.favs';
+const LS_COMFY = 'tagcraft.comfy';
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
@@ -72,7 +83,7 @@ function toast(msg, bad) {
   el.textContent = msg;
   el.className = 'toast show' + (bad ? ' bad' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2200);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
 }
 
 function loadSettings() {
@@ -83,6 +94,29 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); } catch (e) { return []; }
 }
 function saveHistory(list) { localStorage.setItem(LS_HISTORY, JSON.stringify(list.slice(0, 30))); }
+
+/* ---- 收藏夹 ---- */
+function loadFavs() {
+  try { return JSON.parse(localStorage.getItem(LS_FAVS) || '[]'); } catch (e) { return []; }
+}
+function saveFavs(list) { localStorage.setItem(LS_FAVS, JSON.stringify(list.slice(0, 200))); }
+function isFav(tag) { return loadFavs().some(f => f.tag === tag); }
+/** 收藏/取消收藏，返回 true 表示现在是"已收藏" */
+function toggleFav(chip) {
+  const list = loadFavs();
+  const i = list.findIndex(f => f.tag === chip.tag);
+  if (i >= 0) list.splice(i, 1);
+  else list.push({ tag: chip.tag, cn: chip.cn || '', category: chip.category || 0,
+                   post_count: chip.post_count || 0 });
+  saveFavs(list);
+  return i < 0;
+}
+
+/* ---- ComfyUI 配置 ---- */
+function loadComfy() {
+  try { return JSON.parse(localStorage.getItem(LS_COMFY) || '{}'); } catch (e) { return {}; }
+}
+function saveComfy(c) { localStorage.setItem(LS_COMFY, JSON.stringify(c)); }
 
 function isQuality(chip) {
   return chip.category === 5 || chip.policy === 'quality' ||

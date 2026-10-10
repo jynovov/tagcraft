@@ -166,6 +166,20 @@ def main():
         check("质量词白名单放行", st == 200 and "quality" in body, "HTTP %s" % st)
         check("编造的 tag 被标出", st == 200 and "zzz_fake_tag_zzz" in body)
 
+        say("ComfyUI 对接：")
+        st, body = get("/api/comfy/ping?url=http://127.0.0.1:9")
+        check("ComfyUI 没开时给友好报错", st == 400 and "连不上" in body, "HTTP %s" % st)
+
+        st, body = post("/api/comfy/send", {"url": "http://127.0.0.1:9", "workflow": {},
+                                            "positive": "1girl", "negative": ""})
+        check("没配工作流时给提示", st == 400 and "工作流" in body, "HTTP %s" % st)
+
+        st, body = post("/api/comfy/send", {
+            "url": "http://127.0.0.1:9",
+            "workflow": {"1": {"class_type": "KSampler", "inputs": {}}},
+            "positive": "1girl", "negative": ""})
+        check("工作流里没有文本节点时报错", st == 400 and "CLIPTextEncode" in body, "HTTP %s" % st)
+
         # 用一个必定连不上的本地地址，保证这个检查既快又确定
         st, body = post("/api/llm/test",
                         {"api": {"api_base": "http://127.0.0.1:9/v1/chat/completions",

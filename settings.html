@@ -72,6 +72,36 @@
         </div>
         <div id="dictInfo" class="page-sub" style="margin-top:10px"></div>
       </div>
+
+      <div class="card">
+        <div class="card-title">
+          ComfyUI（一键出图）
+          <span class="spacer"></span>
+          <button id="btnComfyTest" class="small">测试连接</button>
+        </div>
+        <div class="field">
+          <label>地址</label>
+          <input id="comfyUrl" class="mono" placeholder="http://127.0.0.1:8188">
+        </div>
+        <div class="field">
+          <label>工作流（API 格式 JSON）—— 在 ComfyUI 菜单「工作流 → 导出（API）」后，整段粘到这里</label>
+          <textarea id="comfyWorkflow" rows="8" class="mono" placeholder='{"3":{"class_type":"KSampler","inputs":{...}}}'></textarea>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>正向节点 id（留空自动识别）</label>
+            <input id="comfyPosNode" class="mono" placeholder="例如 6">
+          </div>
+          <div class="field">
+            <label>负向节点 id（留空自动识别）</label>
+            <input id="comfyNegNode" class="mono" placeholder="例如 7">
+          </div>
+        </div>
+        <div class="row">
+          <button id="btnComfySave" class="primary">保存</button>
+          <span id="comfyMsg" class="page-sub"></span>
+        </div>
+      </div>
     </div>
   </div>
 </div>

@@ -209,3 +209,16 @@ button.danger:hover{border-color:var(--bad);color:var(--bad);background:var(--ba
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.bad{background:#c4554c}
+
+/* ---------------- 工具使用统计（答辩时可直接指着讲） ---------------- */
+.stats{
+  display:none;background:#f2f8ff;border:1px solid var(--line);border-radius:10px;
+  padding:8px 12px;font-size:12.5px;color:#4a6b85;margin-bottom:12px;
+}
+.stats.show{display:block}
+
+/* ---------------- 收藏 ---------------- */
+button.star{color:#b9cadb;padding:5px 9px}
+button.star.on{color:#d98f2b;border-color:#f0d9b0;background:#fffaf1}
+.tag.fav{cursor:pointer;border-style:dashed}
+.tag.fav:hover{border-color:var(--accent);background:var(--accent-soft)}

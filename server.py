@@ -49,6 +49,16 @@ CSV_PATH = os.path.join(DATA_DIR, "danbooru_zh.csv")
 SEED_PATH = os.path.join(DATA_DIR, "seed_tags.csv")
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 
+# ComfyUI 默认地址（可在设置页改）
+COMFY_DEFAULT_URL = "http://127.0.0.1:8188"
+
+# 判断某个 CLIPTextEncode 节点装的是正向还是负向提示词时用的关键词
+NEG_HINTS = (
+    "worst_quality", "low_quality", "bad_quality", "normal_quality", "lowres",
+    "blurry", "bad_anatomy", "bad_hands", "bad_proportions", "extra_digits",
+    "fewer_digits", "watermark", "signature", "jpeg_artifacts", "extra_limbs",
+)
+
 # 词表下载源。每个源可以有多个镜像 URL，按顺序尝试。
 #   ffdkj : 33.1 万条（post_count>=10），MIT，校验覆盖面最大，但没有别名字段
 #   guwuw : 12.5 万条（post_count>=50），带 3.4 万别名，体积小、走 CDN 快
@@ -703,6 +713,137 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6):
     return content, parsed, body.get("usage") or {}
 
 
+# ---------------------------------------------------------------- ComfyUI 对接
+
+
+def _post_json(url, payload, timeout=30):
+    """POST 一个 JSON，返回解析后的响应体。失败时抛出带友好说明的 RuntimeError。"""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+        return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError("ComfyUI 返回 %s：%s" % (e.code, detail))
+    except urllib.error.URLError as e:
+        raise RuntimeError("连不上 ComfyUI（%s）：%s" % (url, getattr(e, "reason", e)))
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError("请求 ComfyUI 失败：%s" % e)
+
+
+def comfy_ping(url=None):
+    """测试 ComfyUI 是否在线，顺便取版本号。"""
+    url = (url or COMFY_DEFAULT_URL).rstrip("/")
+    try:
+        stats = _get_json(url + "/system_stats", timeout=8)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(str(e))
+    sysinfo = stats.get("system") or {}
+    return {
+        "ok": True,
+        "url": url,
+        "version": sysinfo.get("comfyui_version") or "未知",
+        "python": sysinfo.get("python_version") or "",
+        "device": ((stats.get("devices") or [{}])[0].get("name") or ""),
+    }
+
+
+def _get_json(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": "TagCraft/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("HTTP %s：%s" % (e.code, e.read().decode("utf-8", "replace")[:200]))
+    except urllib.error.URLError as e:
+        raise RuntimeError("连不上 %s（%s）" % (url, getattr(e, "reason", e)))
+
+
+def find_text_nodes(workflow):
+    """找出工作流里的文本编码节点（兼容 CLIPTextEncode / CLIPTextEncodeSDXL 等）。
+
+    返回 [(节点id, 当前文本, 看起来是正向还是负向), ...]
+    """
+    out = []
+    for nid, node in (workflow or {}).items():
+        if not isinstance(node, dict):
+            continue
+        cls = str(node.get("class_type") or "")
+        if "CLIPTextEncode" not in cls:
+            continue
+        text = ""
+        try:
+            text = str((node.get("inputs") or {}).get("text") or "")
+        except Exception:
+            text = ""
+        looks_neg = any(h in text.lower() for h in NEG_HINTS)
+        out.append((str(nid), text, looks_neg))
+    # 按节点 id 排序，保证结果稳定（ComfyUI 的 id 是数字字符串）
+    def key(item):
+        try:
+            return (0, int(item[0]))
+        except ValueError:
+            return (1, item[0])
+    return sorted(out, key=key)
+
+
+def comfy_send(url, workflow, positive, negative, pos_id=None, neg_id=None):
+    """把 tag 写进工作流的文本节点，然后排队出图。"""
+    url = (url or COMFY_DEFAULT_URL).rstrip("/")
+    if isinstance(workflow, str):
+        try:
+            workflow = json.loads(workflow)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError("工作流 JSON 解析失败：%s" % e)
+    if not isinstance(workflow, dict) or not workflow:
+        raise RuntimeError("还没有粘贴 ComfyUI 工作流（设置页 → ComfyUI）")
+    # 有些人导出的 JSON 外面还包了一层 prompt
+    if "prompt" in workflow and isinstance(workflow["prompt"], dict):
+        workflow = workflow["prompt"]
+
+    nodes = find_text_nodes(workflow)
+    if not nodes:
+        raise RuntimeError("工作流里找不到 CLIPTextEncode 节点，请检查粘贴的是不是 API 格式工作流")
+
+    def pick(explicit, want_neg):
+        if explicit and str(explicit) in workflow:
+            return str(explicit)
+        for nid, _text, looks_neg in nodes:
+            if looks_neg == want_neg:
+                return nid
+        # 兜底：正向取第一个，负向取第二个
+        if want_neg:
+            return nodes[1][0] if len(nodes) > 1 else nodes[0][0]
+        return nodes[0][0]
+
+    pos_node = pick(pos_id, False)
+    neg_node = pick(neg_id, True)
+
+    for nid, text in ((pos_node, positive), (neg_node, negative)):
+        node = workflow.get(nid)
+        if not isinstance(node, dict):
+            raise RuntimeError("节点 %s 不存在于工作流里" % nid)
+        node.setdefault("inputs", {})
+        node["inputs"]["text"] = text or ""
+
+    body = _post_json(url + "/prompt",
+                      {"prompt": workflow, "client_id": "tagcraft"}, timeout=30)
+    if body.get("node_errors"):
+        raise RuntimeError("ComfyUI 报节点错误：%s" % json.dumps(body["node_errors"], ensure_ascii=False)[:300])
+    return {
+        "ok": True,
+        "url": url,
+        "prompt_id": body.get("prompt_id"),
+        "number": body.get("number"),
+        "positive_node": pos_node,
+        "negative_node": neg_node,
+        "nodes": [{"id": n, "looks_negative": b} for n, _t, b in nodes],
+    }
+
+
 # ---------------------------------------------------------------- HTTP 服务
 
 class Server(ThreadingHTTPServer):
@@ -805,6 +946,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/dict/suggest":
             return self._send(200, {"results": suggest_for(query.get("tag", ""), 8)})
 
+        if path == "/api/comfy/ping":
+            try:
+                return self._send(200, comfy_ping(query.get("url")))
+            except Exception as e:  # noqa: BLE001
+                return self._send(400, {"error": str(e)})
+
         return self._send(404, {"error": "unknown path " + path})
 
     def do_POST(self):
@@ -828,6 +975,17 @@ class Handler(BaseHTTPRequestHandler):
             log("收到关闭请求，正在退出…")
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
+
+        if path == "/api/comfy/send":
+            try:
+                res = comfy_send(
+                    body.get("url"), body.get("workflow"),
+                    body.get("positive") or "", body.get("negative") or "",
+                    body.get("positive_node"), body.get("negative_node"))
+            except Exception as e:  # noqa: BLE001
+                return self._send(400, {"error": str(e)})
+            log("已发送到 ComfyUI：prompt_id=%s number=%s" % (res.get("prompt_id"), res.get("number")))
+            return self._send(200, res)
 
         if path == "/api/dict/update":
             res = download_dict(body.get("source"))
