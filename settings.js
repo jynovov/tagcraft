@@ -107,6 +107,28 @@ function init() {
     }
   });
 
+  $('btnComfyInspect').addEventListener('click', async () => {
+    let cfg;
+    try { cfg = collectComfy(); } catch (e) { toast(e.message, true); return; }
+    const box = $('comfyNodes');
+    box.textContent = '识别中…';
+    try {
+      const r = await api('/api/comfy/inspect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflow: cfg.workflow, positive_node: cfg.positiveNode,
+                               negative_node: cfg.negativeNode })
+      });
+      const lines = (r.nodes || []).map(n =>
+        `节点 ${n.id}（${n.class_type}）${n.looks_negative ? '负向' : '正向'}｜现在装着：${n.text || '（空）'}`);
+      box.textContent = `正向 → 节点 ${r.positive_node}，负向 → 节点 ${r.negative_node}　·　` +
+        lines.join('　·　');
+      toast('识别完成：正向 ' + r.positive_node + ' / 负向 ' + r.negative_node);
+    } catch (e) {
+      box.textContent = '';
+      toast(e.message, true);
+    }
+  });
+
   $('btnComfyTest').addEventListener('click', async () => {
     let url;
     try { url = collectComfy().url; } catch (e) { toast(e.message, true); return; }

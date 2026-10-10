@@ -763,16 +763,19 @@ def _get_json(url, timeout=15):
 
 
 def find_text_nodes(workflow):
-    """找出工作流里的文本编码节点（兼容 CLIPTextEncode / CLIPTextEncodeSDXL 等）。
+    """找出工作流里的文本编码节点。
 
-    返回 [(节点id, 当前文本, 看起来是正向还是负向), ...]
+    除了标准的 CLIPTextEncode / CLIPTextEncodeSDXL，也兼容名字里带 TextEncode 的
+    自定义节点（BNK_CLIPTextEncodeAdvanced、TextEncodeQwenImageEdit 等）。
+
+    返回 [(节点id, class_type, 当前文本, 看起来是正向还是负向), ...]
     """
     out = []
     for nid, node in (workflow or {}).items():
         if not isinstance(node, dict):
             continue
         cls = str(node.get("class_type") or "")
-        if "CLIPTextEncode" not in cls:
+        if "textencode" not in cls.lower():
             continue
         text = ""
         try:
@@ -780,7 +783,7 @@ def find_text_nodes(workflow):
         except Exception:
             text = ""
         looks_neg = any(h in text.lower() for h in NEG_HINTS)
-        out.append((str(nid), text, looks_neg))
+        out.append((str(nid), cls, text, looks_neg))
     # 按节点 id 排序，保证结果稳定（ComfyUI 的 id 是数字字符串）
     def key(item):
         try:
@@ -788,6 +791,58 @@ def find_text_nodes(workflow):
         except ValueError:
             return (1, item[0])
     return sorted(out, key=key)
+
+
+def _class_types(workflow, limit=30):
+    """列出工作流里出现过的节点类型，报错时给用户看，方便定位问题。"""
+    names = []
+    for node in (workflow or {}).values():
+        if isinstance(node, dict):
+            cls = str(node.get("class_type") or "")
+            if cls and cls not in names:
+                names.append(cls)
+    return names[:limit]
+
+
+def comfy_inspect(workflow, pos_id=None, neg_id=None):
+    """只分析工作流结构、不连 ComfyUI：识别出正/负节点，供设置页确认。"""
+    if isinstance(workflow, str):
+        try:
+            workflow = json.loads(workflow)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError("工作流 JSON 解析失败：%s" % e)
+    if not isinstance(workflow, dict) or not workflow:
+        raise RuntimeError("还没有粘贴 ComfyUI 工作流（设置页 → ComfyUI）")
+    if "prompt" in workflow and isinstance(workflow["prompt"], dict):
+        workflow = workflow["prompt"]
+
+    nodes = find_text_nodes(workflow)
+    if not nodes:
+        raise RuntimeError("工作流里找不到文本编码节点（CLIPTextEncode 之类）。现有的节点类型：%s"
+                           % "、".join(_class_types(workflow)))
+
+    def pick(explicit, want_neg):
+        if explicit and str(explicit) in workflow:
+            return str(explicit), True
+        for nid, _cls, _t, looks_neg in nodes:
+            if looks_neg == want_neg:
+                return nid, False
+        # 兜底：正向取第一个，负向取第二个
+        return (nodes[1][0] if (want_neg and len(nodes) > 1) else nodes[0][0]), False
+
+    pos_node, pos_manual = pick(pos_id, False)
+    neg_node, neg_manual = pick(neg_id, True)
+    return {
+        "ok": True,
+        "positive_node": pos_node,
+        "negative_node": neg_node,
+        "positive_manual": pos_manual,
+        "negative_manual": neg_manual,
+        "nodes": [{"id": n, "class_type": c, "looks_negative": b,
+                   "text": (t[:60] + "…") if len(t) > 60 else t}
+                  for n, c, t, b in nodes],
+        "all_class_types": _class_types(workflow),
+    }
 
 
 def comfy_send(url, workflow, positive, negative, pos_id=None, neg_id=None):
@@ -804,23 +859,9 @@ def comfy_send(url, workflow, positive, negative, pos_id=None, neg_id=None):
     if "prompt" in workflow and isinstance(workflow["prompt"], dict):
         workflow = workflow["prompt"]
 
-    nodes = find_text_nodes(workflow)
-    if not nodes:
-        raise RuntimeError("工作流里找不到 CLIPTextEncode 节点，请检查粘贴的是不是 API 格式工作流")
-
-    def pick(explicit, want_neg):
-        if explicit and str(explicit) in workflow:
-            return str(explicit)
-        for nid, _text, looks_neg in nodes:
-            if looks_neg == want_neg:
-                return nid
-        # 兜底：正向取第一个，负向取第二个
-        if want_neg:
-            return nodes[1][0] if len(nodes) > 1 else nodes[0][0]
-        return nodes[0][0]
-
-    pos_node = pick(pos_id, False)
-    neg_node = pick(neg_id, True)
+    info = comfy_inspect(workflow, pos_id, neg_id)
+    pos_node = info["positive_node"]
+    neg_node = info["negative_node"]
 
     for nid, text in ((pos_node, positive), (neg_node, negative)):
         node = workflow.get(nid)
@@ -840,7 +881,7 @@ def comfy_send(url, workflow, positive, negative, pos_id=None, neg_id=None):
         "number": body.get("number"),
         "positive_node": pos_node,
         "negative_node": neg_node,
-        "nodes": [{"id": n, "looks_negative": b} for n, _t, b in nodes],
+        "nodes": info["nodes"],
     }
 
 
@@ -975,6 +1016,14 @@ class Handler(BaseHTTPRequestHandler):
             log("收到关闭请求，正在退出…")
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
+
+        if path == "/api/comfy/inspect":
+            try:
+                res = comfy_inspect(body.get("workflow"),
+                                    body.get("positive_node"), body.get("negative_node"))
+            except Exception as e:  # noqa: BLE001
+                return self._send(400, {"error": str(e)})
+            return self._send(200, res)
 
         if path == "/api/comfy/send":
             try:
