@@ -138,13 +138,16 @@ def main():
 
         say("页面：")
         for path, must in [("/", "中文转 tag"),
-                           ("/settings.html", "系统提示词"),
-                           ("/history.html", "历史记录")]:
+                           ("/favorites.html", "收藏"),
+                           ("/history.html", "历史记录"),
+                           ("/comfy.html", "工作流"),
+                           ("/settings.html", "系统提示词")]:
             st, body = get(path)
             check("GET " + path, st == 200 and must in body, "HTTP %s" % st)
 
         say("静态资源：")
-        for path in ("/style.css", "/common.js", "/app.js", "/settings.js", "/history.js"):
+        for path in ("/style.css", "/common.js", "/app.js", "/settings.js", "/history.js",
+                     "/favorites.js", "/comfy.js"):
             st, body = get(path)
             check("GET " + path, st == 200 and len(body) > 300, "%d 字节" % len(body))
 

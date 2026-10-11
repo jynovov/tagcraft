@@ -1,4 +1,4 @@
-/* 设置页 */
+/* 设置页：大模型 / 智能体 / 系统提示词 / 词表 */
 
 const $ = (id) => document.getElementById(id);
 let defaultPrompt = '';
@@ -27,14 +27,6 @@ function fill() {
   $('model').value = s.model || '';
   $('apiKey').value = s.apiKey || '';
   $('temperature').value = s.temperature || 0.6;
-  $('maxTags').value = s.maxTags || 40;
-
-  const c = loadComfy();
-  $('comfyUrl').value = c.url || 'http://127.0.0.1:8188';
-  $('comfyWorkflow').value = c.workflow || '';
-  $('comfyPosNode').value = c.positiveNode || '';
-  $('comfyNegNode').value = c.negativeNode || '';
-
   $('agentRounds').value = s.agentRounds || 6;
   $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
   $('reflect').checked = s.reflect !== false;
@@ -46,24 +38,9 @@ function collect() {
     model: $('model').value.trim(),
     apiKey: $('apiKey').value.trim(),
     temperature: $('temperature').value,
-    maxTags: +$('maxTags').value || 40,
     agentRounds: +$('agentRounds').value || 6,
     reflectRounds: +$('reflectRounds').value || 0,
     reflect: $('reflect').checked
-  };
-}
-
-function collectComfy() {
-  const wf = $('comfyWorkflow').value.trim();
-  if (wf) {
-    try { JSON.parse(wf); }
-    catch (e) { throw new Error('工作流 JSON 有问题：' + e.message); }
-  }
-  return {
-    url: $('comfyUrl').value.trim() || 'http://127.0.0.1:8188',
-    workflow: wf,
-    positiveNode: $('comfyPosNode').value.trim(),
-    negativeNode: $('comfyNegNode').value.trim()
   };
 }
 
@@ -73,8 +50,9 @@ function init() {
   loadStatus().catch(e => toast(e.message, true));
 
   $('btnSave').addEventListener('click', () => {
-    saveSettings(collect());
-    localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+    // 保留其它页写入的设置（例如生成页的上限）
+    const old = loadSettings();
+    saveSettings(Object.assign({}, old, collect()));
     toast('已保存');
   });
 
@@ -101,51 +79,6 @@ function init() {
       toast('连接正常');
     } catch (e) {
       $('testMsg').textContent = '失败';
-      toast(e.message, true);
-    }
-  });
-
-  $('btnComfySave').addEventListener('click', () => {
-    try {
-      saveComfy(collectComfy());
-      toast('ComfyUI 配置已保存');
-    } catch (e) {
-      toast(e.message, true);
-    }
-  });
-
-  $('btnComfyInspect').addEventListener('click', async () => {
-    let cfg;
-    try { cfg = collectComfy(); } catch (e) { toast(e.message, true); return; }
-    const box = $('comfyNodes');
-    box.textContent = '识别中…';
-    try {
-      const r = await api('/api/comfy/inspect', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflow: cfg.workflow, positive_node: cfg.positiveNode,
-                               negative_node: cfg.negativeNode })
-      });
-      const lines = (r.nodes || []).map(n =>
-        `节点 ${n.id}（${n.class_type}）${n.looks_negative ? '负向' : '正向'}｜现在装着：${n.text || '（空）'}`);
-      box.textContent = `正向 → 节点 ${r.positive_node}，负向 → 节点 ${r.negative_node}　·　` +
-        lines.join('　·　');
-      toast('识别完成：正向 ' + r.positive_node + ' / 负向 ' + r.negative_node);
-    } catch (e) {
-      box.textContent = '';
-      toast(e.message, true);
-    }
-  });
-
-  $('btnComfyTest').addEventListener('click', async () => {
-    let url;
-    try { url = collectComfy().url; } catch (e) { toast(e.message, true); return; }
-    $('comfyMsg').textContent = '测试中…';
-    try {
-      const r = await api('/api/comfy/ping?url=' + encodeURIComponent(url));
-      $('comfyMsg').textContent = '连接正常 · ComfyUI ' + r.version + (r.device ? ' · ' + r.device : '');
-      toast('ComfyUI 连接正常');
-    } catch (e) {
-      $('comfyMsg').textContent = '连不上';
       toast(e.message, true);
     }
   });

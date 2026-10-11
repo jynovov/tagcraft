@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · ComfyUI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">ComfyUI</h1>
+      <span class="head-right"><span id="comfyState" class="pill">未测试</span></span>
+    </div>
+
+    <div class="stack">
+      <div class="card">
+        <div class="card-title">怎么用</div>
+        <ol class="howto">
+          <li>在 ComfyUI 里搭好工作流：Checkpoint → CLIPTextEncode ×2 → KSampler → VAE Decode → SaveImage</li>
+          <li>菜单 <b>工作流 → 导出（API）</b>，把得到的 JSON 整段复制</li>
+          <li>粘到下面，先点「识别节点」确认正/负节点认对了，再点「测试连接」</li>
+          <li>回到「生成」页生成 tag，点「发送到 ComfyUI」——任务会自动进队列</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          工作流配置
+          <span class="spacer"></span>
+          <button id="btnInspect" class="small">识别节点</button>
+          <button id="btnTest" class="small">测试连接</button>
+        </div>
+        <div class="field">
+          <label>地址</label>
+          <input id="comfyUrl" class="mono" placeholder="http://127.0.0.1:8188">
+        </div>
+        <div class="field">
+          <label>工作流（API 格式 JSON）</label>
+          <textarea id="comfyWorkflow" rows="10" class="mono"
+            placeholder='{"3":{"class_type":"KSampler","inputs":{...}}}'></textarea>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>正向节点 id（留空自动识别）</label>
+            <input id="comfyPosNode" class="mono" placeholder="例如 6">
+          </div>
+          <div class="field">
+            <label>负向节点 id（留空自动识别）</label>
+            <input id="comfyNegNode" class="mono" placeholder="例如 7">
+          </div>
+        </div>
+        <div id="comfyNodes" class="page-sub" style="margin-top:10px"></div>
+        <div class="row">
+          <button id="btnSave" class="primary">保存</button>
+          <span id="comfyMsg" class="page-sub"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="comfy.js"></script>
+</body>
+</html>

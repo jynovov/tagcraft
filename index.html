@@ -19,51 +19,43 @@
     </div>
 
     <div class="layout">
-      <!-- 左：输入 -->
+      <!-- 左：输入 + 查词 -->
       <div class="col">
         <div class="card">
           <div class="card-title">描述画面</div>
-          <textarea id="inputText" rows="8" placeholder="用中文描述你想画的画面，可以写很长（Ctrl+Enter 生成）"></textarea>
+          <textarea id="inputText" rows="10"
+            placeholder="用中文描述你想画的画面，可以写很长（Ctrl+Enter 生成）"></textarea>
           <div class="row">
             <label class="inline">上限
               <input id="maxTags" type="number" min="10" max="80" value="40">
             </label>
-            <input id="extraRules" type="text" placeholder="额外要求（可留空）" style="flex:1;min-width:140px">
-          </div>
-          <div class="row">
-            <button id="btnGenerate" class="primary">生成 tag</button>
-            <button id="btnClear" class="ghost">清空</button>
-            <label class="inline" style="margin-left:auto"
-                   title="让模型自己决定查词表，并自我评审重写">
+            <label class="inline check" title="让模型自己决定查词表，并自我评审重写">
               <input id="useAgent" type="checkbox" checked> Agent 模式
             </label>
+          </div>
+          <div class="row">
+            <button id="btnGenerate" class="primary wide">生成 tag</button>
+            <button id="btnClear" class="ghost">清空</button>
           </div>
         </div>
 
         <div class="card">
           <div class="card-title">查词</div>
           <div class="row" style="margin-top:0">
-            <input id="searchInput" type="text" placeholder="中文或英文" style="flex:1">
-            <select id="searchCat" style="width:auto">
-              <option value="all">全部</option>
+            <input id="searchInput" type="text" placeholder="中文或英文" style="flex:1;min-width:0">
+            <button id="btnSearch">搜索</button>
+          </div>
+          <div class="row">
+            <select id="searchCat">
+              <option value="all">全部分类</option>
               <option value="0">常规</option>
               <option value="1">画师</option>
               <option value="3">作品</option>
               <option value="4">角色</option>
               <option value="5">元数据</option>
             </select>
-            <button id="btnSearch">搜索</button>
           </div>
           <div id="searchResults" class="list"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">
-            我的收藏 <span id="favCount" class="count">0</span>
-            <span class="spacer"></span>
-            <button id="btnClearFavs" class="small ghost danger">清空</button>
-          </div>
-          <div id="favs" class="tags"></div>
         </div>
       </div>
 
@@ -73,18 +65,27 @@
           <div class="card-title">
             结果
             <span class="spacer"></span>
-            <button id="btnSort" class="small ghost">排序</button>
-            <button id="btnDedup" class="small ghost">去重</button>
-            <button id="btnValidate" class="small ghost">校验</button>
+            <button id="btnFav" class="small">★ 收藏这套</button>
+            <button id="btnValidate" class="small ghost">重新校验</button>
           </div>
           <div id="genStats" class="stats"></div>
-          <div id="trace" class="trace"></div>
-          <div id="review" class="review"></div>
+
+          <details id="traceBox" class="fold">
+            <summary id="traceSum">智能体工具调用轨迹</summary>
+            <div id="trace" class="fold-body"></div>
+          </details>
+
+          <details id="reviewBox" class="fold">
+            <summary id="reviewSum">自省评审</summary>
+            <div id="review" class="fold-body"></div>
+          </details>
+
           <div id="notes" class="notes"></div>
 
           <div class="group">
             <div class="group-title">
               质量词 <span id="qCount" class="count">0</span>
+              <span class="spacer"></span>
               <button id="btnQualityPreset" class="small ghost">+ 标准质量词</button>
             </div>
             <div id="qTags" class="tags"></div>
@@ -103,6 +104,7 @@
           <div class="group">
             <div class="group-title">
               负向 tag <span id="negCount" class="count">0</span>
+              <span class="spacer"></span>
               <button id="btnNegBase" class="small ghost">+ 基础负向</button>
               <button id="btnNegAnatomy" class="small ghost">+ 防崩负向</button>
             </div>
@@ -118,23 +120,23 @@
           <div class="row">
             <button id="btnCopyQuality" class="small">复制质量词</button>
             <button id="btnCopyAll" class="small primary">复制完整正向</button>
-            <label class="inline" style="margin-left:auto">
+            <label class="inline check" style="margin-left:auto">
               <input id="useWeight" type="checkbox"> 权重语法
             </label>
           </div>
 
           <label style="margin-top:14px">正向 tag</label>
-          <textarea id="outPos" rows="4" class="mono"></textarea>
+          <textarea id="outPos" rows="3" class="mono"></textarea>
           <div class="row"><button id="btnCopyPos" class="small">复制正向</button></div>
 
           <label style="margin-top:14px">负向 tag</label>
           <textarea id="outNeg" rows="3" class="mono"></textarea>
           <div class="row">
             <button id="btnCopyNeg" class="small">复制负向</button>
-            <button id="btnSendComfy" class="primary" style="margin-left:auto">发送到 ComfyUI</button>
+            <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
           </div>
           <div class="row">
-            <a href="/settings.html" class="page-sub">还没配 ComfyUI？去设置页粘贴工作流 →</a>
+            <a href="/comfy.html" class="page-sub">还没配 ComfyUI？去 ComfyUI 页粘贴工作流 →</a>
           </div>
         </div>
       </div>

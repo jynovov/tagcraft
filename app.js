@@ -48,8 +48,8 @@ function render() {
     const t = state.stats;
     s.textContent = '大模型 ' + t.model + ' 次' +
       (t.tool_calls ? ' · 工具调用 ' + t.tool_calls + ' 次' : '') +
-      ' · 词表工具校验 ' + t.checked + ' 个 tag · 其中 ' + t.unknown + ' 个不存在' +
-      (t.ms ? ' · 耗时 ' + (t.ms / 1000).toFixed(1) + ' 秒' : '');
+      ' · 词表校验 ' + t.checked + ' 个 · 未识别 ' + t.unknown +
+      (t.ms ? ' · ' + (t.ms / 1000).toFixed(1) + ' 秒' : '');
     s.classList.add('show');
   } else {
     s.classList.remove('show');
@@ -57,22 +57,23 @@ function render() {
 
   renderTrace();
   renderReview();
-
   renderOut();
-  renderFavs();
   bindTags();
   bindUnknown();
 }
 
-/* ---------------------------------------------------------------- Agent 轨迹 / 自省 */
-
+/* 折叠面板：收起时只显示步数 / 轮数 / 得分 */
 function renderTrace() {
-  const box = $('trace');
   const tr = state.trace || [];
-  if (!tr.length) { box.classList.remove('show'); box.innerHTML = ''; return; }
-  box.classList.add('show');
-  box.innerHTML = '<div class="trace-title">智能体工具调用轨迹（' + tr.length + ' 步）</div>' +
-    tr.map(s => `<div class="step ${s.tool === '降级' ? 'warn' : ''}">
+  const box = $('traceBox');
+  if (!tr.length) {
+    box.hidden = true;
+    $('trace').innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
+  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' ? 'warn' : ''}">
       <span class="rnd">${s.round}</span>
       <span class="tool">${s.tool}</span>
       <span class="sum">${s.summary || ''}</span>
@@ -80,32 +81,31 @@ function renderTrace() {
 }
 
 function renderReview() {
-  const box = $('review');
   const rv = state.review;
-  if (!rv) { box.classList.remove('show'); box.innerHTML = ''; return; }
-  box.classList.add('show');
+  const box = $('reviewBox');
+  if (!rv) { box.hidden = true; $('review').innerHTML = ''; return; }
+  box.hidden = false;
+  const rounds = rv.rounds || [];
+  $('reviewSum').textContent = '自省评审 · ' + rounds.length + ' 轮' +
+    (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
   if (rv.error) {
-    box.innerHTML = '<div class="trace-title">自省评审失败</div><div class="step warn">' +
-      rv.error + '</div>';
+    $('review').innerHTML = '<div class="step warn">' + rv.error + '</div>';
     return;
   }
-  const rounds = rv.rounds || [];
-  box.innerHTML = '<div class="trace-title">自省评审（' + rounds.length + ' 轮' +
-    (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '') + '）</div>' +
-    rounds.map((r, i) => {
-      const prev = i > 0 ? rounds[i - 1].score : null;
-      const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
-      const probs = (r.problems || []).length
-        ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
-      const miss = (r.missing || []).length
-        ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
-      return `<div class="step">
+  $('review').innerHTML = rounds.map((r, i) => {
+    const prev = i > 0 ? rounds[i - 1].score : null;
+    const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
+    const probs = (r.problems || []).length
+      ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
+    const miss = (r.missing || []).length
+      ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
+    return `<div class="step">
         <span class="rnd">${i + 1}</span>
         <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
-        <span class="sum">改动 ${r.changed || 0} 个 tag${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
+        <span class="sum">改动 ${r.changed || 0} 个${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
         ${probs}${miss}
       </div>`;
-    }).join('');
+  }).join('');
 }
 
 function fmt(c, withWeight) {
@@ -167,44 +167,6 @@ function move(from, to) {
   if (from.kind === to.kind && from.i < to.i) idx -= 1;
   dst.splice(Math.max(0, idx), 0, item);
   render();
-}
-
-/* ---------------------------------------------------------------- 收藏 */
-
-function renderFavs() {
-  const favs = loadFavs();
-  $('favCount').textContent = favs.length;
-  $('favs').innerHTML = favs.length
-    ? favs.map((f, i) => `<div class="tag fav cat${f.category}" data-fav-i="${i}"
-        title="${f.cn || ''} · 点击加入正向 tag"><span class="t">${f.tag}</span>
-        ${f.cn ? `<span class="cn">${f.cn}</span>` : ''}
-        <span class="x" data-unfav="${i}">×</span></div>`).join('')
-    : '<span class="page-sub">在「查词」结果里点 ☆ 就能收藏</span>';
-
-  $('favs').querySelectorAll('[data-fav-i]').forEach(el => {
-    el.addEventListener('click', (ev) => {
-      if (ev.target.dataset.unfav !== undefined) return;
-      const f = loadFavs()[+el.dataset.favI];
-      if (!f) return;
-      if (state.positive.concat(state.quality).some(c => c.tag === f.tag)) {
-        toast('已经在里面了');
-        return;
-      }
-      const c = { tag: f.tag, cn: f.cn, category: f.category, post_count: f.post_count, weight: 1 };
-      (isQuality(c) ? state.quality : state.positive).push(c);
-      render();
-      toast('已加入：' + f.tag);
-    });
-  });
-  $('favs').querySelectorAll('[data-unfav]').forEach(el => {
-    el.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const list = loadFavs();
-      list.splice(+el.dataset.unfav, 1);
-      saveFavs(list);
-      renderFavs();
-    });
-  });
 }
 
 /* ---------------------------------------------------------------- 未识别：小红框 + 候选气泡 */
@@ -293,8 +255,17 @@ async function addByNames(names, kind) {
     else (isQuality(c) ? state.quality : state.positive).push(c);
     added += 1;
   }
+  tidy();
   render();
   toast('已加入 ' + added + ' 个 tag');
+}
+
+/** 生成 / 载入后统一整理：去重 + 正向排序 */
+function tidy() {
+  const t = tidyResult(state);
+  state.quality = t.quality;
+  state.positive = t.positive;
+  state.negative = t.negative;
 }
 
 /* ---------------------------------------------------------------- 生成 */
@@ -305,6 +276,7 @@ async function generate() {
   const agent = $('useAgent').checked;
   const btn = $('btnGenerate');
   btn.disabled = true;
+  btn.textContent = agent ? '智能体运行中…' : '生成中…';
   toast(agent ? '智能体运行中：会自己查词表并自省…' : '正在生成…');
   const st = loadSettings();
   const t0 = Date.now();
@@ -314,7 +286,6 @@ async function generate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text,
-        extra_rules: $('extraRules').value.trim(),
         max_tags: +$('maxTags').value || 40,
         temperature: st.temperature ? +st.temperature : 0.6,
         max_rounds: st.agentRounds ? +st.agentRounds : 6,
@@ -358,12 +329,12 @@ async function generate() {
         : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
       ms: Date.now() - t0
     };
+    tidy();
     if (agent && r.tools_used === false) {
       toast('该接口不支持工具调用，已降级为单次生成', true);
     } else {
       toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
-            ' · 负向 ' + state.negative.length +
-            (state.stats.tool_calls ? ' · 工具调用 ' + state.stats.tool_calls + ' 次' : ''));
+            ' · 负向 ' + state.negative.length);
     }
     render();
     pushHistory(text);
@@ -371,6 +342,7 @@ async function generate() {
     toast(e.message, true);
   } finally {
     btn.disabled = false;
+    btn.textContent = '生成 tag';
   }
 }
 
@@ -387,37 +359,19 @@ function pushHistory(text) {
   saveHistory(list);
 }
 
-/* ---------------------------------------------------------------- 排序 / 去重 / 校验 */
+/* ---------------------------------------------------------------- 收藏这一套 */
 
-const ORDER = [
-  /^(masterpiece|best_quality|amazing_quality|very_aesthetic|absurdres|highres)/i,
-  /^(1girl|1boy|2girls|2boys|multiple|solo|couple|male_focus|portrait|upper_body|lower_body|full_body|cowboy_shot|close-?up|from_\w+|looking_at_viewer|looking_back|looking_away)/,
-  /hair|eye|eyes|bangs|sidelock|ahoge|braid|ponytail|blush|skin|body|breast/,
-  /smile|grin|mouth|expression|angry|sad|crying|tears|stand|sit|kneel|squat|lying|walk|run|jump|holding|arm|hand|wav|peace|lean|tilt|sleep/,
-  /shirt|skirt|dress|uniform|coat|jacket|hoodie|sweater|pants|shorts|thighhigh|sock|shoe|boot|hat|glasses|ribbon|glove|cape|armor|kimono|yukata|swimsuit|bikini|apron|necktie|choker|necklace|scarf|sleeve/,
-  /background|indoors|outdoors|sky|night|day|rain|snow|beach|ocean|sea|lake|forest|tree|flower|grass|field|mountain|city|street|room|classroom|library|cafe|kitchen|window|bed|chair|table|door|stairs|roof|garden|shrine|scenery|landscape|building|house/,
-  /light|sun|moon|glow|shadow|flare|rays|neon|fire|sparkle|candle/,
-  /depth_of_field|bokeh|blurry_background|wide_shot|panorama|anime|sketch|monochrome|greyscale|watercolor|painting|flat_color|cel_|lineart|realistic|chibi|detail/
-];
-
-function sortStandard() {
-  const rank = (c) => {
-    for (let i = 0; i < ORDER.length; i++) if (ORDER[i].test(c.tag)) return i;
-    return ORDER.length;
-  };
-  state.positive.forEach((c, i) => { c._i = i; });
-  state.positive.sort((a, b) => (rank(a) - rank(b)) || (a._i - b._i));
-  state.positive.forEach(c => delete c._i);
-  render();
+function favCurrent() {
+  const text = $('inputText').value.trim();
+  if (!text && !state.positive.length) { toast('还没有内容可收藏', true); return; }
+  const item = makeFav(text, state.quality.map(c => c.tag),
+                       state.positive.map(c => c.tag),
+                       state.negative.map(c => c.tag));
+  const n = addFav(item);
+  toast('已收藏「' + item.title + '」（共 ' + n + ' 条）');
 }
 
-function dedup() {
-  for (const key of ['quality', 'positive', 'negative']) {
-    const seen = new Set();
-    state[key] = state[key].filter(c => seen.has(c.tag) ? false : (seen.add(c.tag), true));
-  }
-  render();
-}
+/* ---------------------------------------------------------------- 重新校验 */
 
 async function revalidate() {
   const tags = state.quality.concat(state.positive, state.negative).map(c => c.tag);
@@ -442,8 +396,10 @@ async function revalidate() {
       u.suggestions = s.results || [];
     } catch (e) { /* ignore */ }
   }
-  state.stats = { model: state.stats ? state.stats.model : 0, checked: tags.length,
-                  unknown: state.unknown.length, ms: 0 };
+  state.stats = { model: state.stats ? state.stats.model : 0,
+                  tool_calls: state.stats ? state.stats.tool_calls : 0,
+                  checked: tags.length, unknown: state.unknown.length, ms: 0 };
+  tidy();
   toast('已按词表校验');
   render();
 }
@@ -455,20 +411,15 @@ async function doSearch() {
   if (!q) return;
   const r = await api(`/api/dict/search?q=${encodeURIComponent(q)}&limit=40&category=${$('searchCat').value}`);
   const list = r.results || [];
-  $('searchResults').innerHTML = list.length ? list.map(h => {
-    const faved = isFav(h.tag);
-    return `<div class="item">
+  $('searchResults').innerHTML = list.length ? list.map(h => `<div class="item">
       <span class="name">${h.tag}</span>
       <span class="cn">${h.cn || ''}</span>
       <span class="meta">${(h.post_count || 0).toLocaleString()}</span>
       <span class="acts">
-        <button class="small star ${faved ? 'on' : ''}" data-star="${h.tag}" data-cn="${h.cn || ''}"
-          data-cat="${h.category}" data-pc="${h.post_count || 0}" title="收藏">${faved ? '★' : '☆'}</button>
         <button class="small" data-add="pos" data-tag="${h.tag}" data-cn="${h.cn || ''}" data-cat="${h.category}" data-pc="${h.post_count || 0}">+正</button>
         <button class="small" data-add="neg" data-tag="${h.tag}" data-cn="${h.cn || ''}" data-cat="${h.category}" data-pc="${h.post_count || 0}">+负</button>
       </span>
-    </div>`;
-  }).join('') : '<div class="empty">没有结果</div>';
+    </div>`).join('') : '<div class="empty">没有结果</div>';
 
   $('searchResults').querySelectorAll('[data-add]').forEach(b => {
     b.addEventListener('click', () => {
@@ -476,17 +427,9 @@ async function doSearch() {
                   post_count: +b.dataset.pc, weight: 1 };
       if (b.dataset.add === 'neg') state.negative.push(c);
       else (isQuality(c) ? state.quality : state.positive).push(c);
+      tidy();
       render();
-    });
-  });
-  $('searchResults').querySelectorAll('[data-star]').forEach(b => {
-    b.addEventListener('click', () => {
-      const on = toggleFav({ tag: b.dataset.star, cn: b.dataset.cn,
-                             category: +b.dataset.cat, post_count: +b.dataset.pc });
-      b.textContent = on ? '★' : '☆';
-      b.classList.toggle('on', on);
-      renderFavs();
-      toast(on ? '已收藏 ' + b.dataset.star : '已取消收藏');
+      toast('已加入 ' + c.tag);
     });
   });
 }
@@ -509,7 +452,7 @@ function positiveText() {
 async function sendToComfy() {
   const cfg = loadComfy();
   if (!cfg.workflow) {
-    toast('还没配 ComfyUI：去设置页粘贴 API 格式工作流', true);
+    toast('还没配 ComfyUI：去 ComfyUI 页粘贴工作流', true);
     return;
   }
   const pos = positiveText();
@@ -562,6 +505,19 @@ function syncFromText(id, key) {
   });
 }
 
+/** 把一条记录（收藏 / 历史）载入当前结果 */
+function loadRecord(item) {
+  $('inputText').value = item.full || item.text || '';
+  state.quality = (item.quality || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+  state.positive = (item.pos || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+  state.negative = (item.neg || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+  state.trace = [];
+  state.review = null;
+  state.notes = '';
+  render();
+  revalidate();
+}
+
 function init() {
   renderSidebar('gen');
   loadStatus();
@@ -573,24 +529,20 @@ function init() {
   $('btnClear').addEventListener('click', () => {
     $('inputText').value = '';
     state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
-    state.notes = ''; state.stats = null; state.trace = []; state.review = null; render();
+    state.notes = ''; state.stats = null; state.trace = []; state.review = null;
+    $('searchResults').innerHTML = '';
+    render();
   });
   $('btnSearch').addEventListener('click', doSearch);
   $('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('inputText').addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generate(); }
   });
-  $('btnSort').addEventListener('click', sortStandard);
-  $('btnDedup').addEventListener('click', dedup);
+  $('btnFav').addEventListener('click', favCurrent);
   $('btnValidate').addEventListener('click', revalidate);
   $('btnQualityPreset').addEventListener('click', () => addByNames(QUALITY_PRESET, 'pos'));
   $('btnNegBase').addEventListener('click', () => addByNames(NEG_BASE, 'neg'));
   $('btnNegAnatomy').addEventListener('click', () => addByNames(NEG_ANATOMY, 'neg'));
-  $('btnClearFavs').addEventListener('click', () => {
-    if (!loadFavs().length) return;
-    if (!confirm('清空收藏？')) return;
-    saveFavs([]); renderFavs();
-  });
   $('useWeight').addEventListener('change', renderOut);
   $('btnCopyQuality').addEventListener('click', () => copy($('outQuality').value));
   $('btnCopyPos').addEventListener('click', () => copy($('outPos').value));
@@ -601,18 +553,12 @@ function init() {
   $('outPos').addEventListener('input', () => syncFromText('outPos', 'positive'));
   $('outNeg').addEventListener('input', () => syncFromText('outNeg', 'negative'));
 
-  // 从历史页带过来的记录
+  // 从收藏页 / 历史页带过来的记录
   try {
     const p = localStorage.getItem(LS_PENDING);
     if (p) {
-      const item = JSON.parse(p);
       localStorage.removeItem(LS_PENDING);
-      $('inputText').value = item.full || item.text || '';
-      state.quality = (item.quality || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
-      state.positive = (item.pos || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
-      state.negative = (item.neg || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
-      render();
-      revalidate();
+      loadRecord(JSON.parse(p));
       return;
     }
   } catch (e) { /* ignore */ }

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · 收藏</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">收藏</h1>
+      <span class="head-right">
+        <span id="favCount" class="pill">0 条</span>
+        <button id="btnClearAll" class="small ghost danger">清空全部</button>
+      </span>
+    </div>
+
+    <div class="stack">
+      <div class="card">
+        <div class="card-title">收藏的画面</div>
+        <div class="page-sub" style="margin-bottom:10px">
+          在「生成」页点 <b>★ 收藏这套</b>，会把当时的<b>中文描述 + 整套 tag</b>一起存下来。
+          这里点「载入生成页」就能直接复现那一套。
+        </div>
+        <div id="list" class="list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="favorites.js"></script>
+</body>
+</html>

@@ -16,7 +16,7 @@
       <span class="head-right"><span id="dictStatus" class="pill">词表加载中…</span></span>
     </div>
 
-    <div style="max-width:820px;display:flex;flex-direction:column;gap:16px">
+    <div class="stack">
       <div class="card">
         <div class="card-title">大模型</div>
         <div class="field">
@@ -56,7 +56,7 @@
             <input id="reflectRounds" type="number" min="0" max="4" value="2">
           </div>
         </div>
-        <label class="inline" style="margin-top:10px">
+        <label class="inline check" style="margin-top:12px">
           <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写
         </label>
         <div class="page-sub" style="margin-top:8px">
@@ -67,20 +67,12 @@
       </div>
 
       <div class="card">
-        <div class="card-title">生成默认值</div>
-        <div class="field" style="max-width:220px">
-          <label>正向 tag 上限</label>
-          <input id="maxTags" type="number" min="10" max="80" value="40">
-        </div>
-      </div>
-
-      <div class="card">
         <div class="card-title">
           系统提示词
           <span class="spacer"></span>
           <button id="btnResetPrompt" class="small ghost">恢复默认</button>
         </div>
-        <textarea id="systemPrompt" rows="16" class="mono"></textarea>
+        <textarea id="systemPrompt" rows="14" class="mono"></textarea>
         <div class="row">
           <button id="btnSavePrompt" class="primary">保存提示词</button>
         </div>
@@ -89,42 +81,10 @@
       <div class="card">
         <div class="card-title">词表</div>
         <div class="row" style="margin-top:0">
-          <select id="dictSource" style="flex:1"></select>
+          <select id="dictSource" style="flex:1;min-width:0"></select>
           <button id="btnUpdateDict">更新词表</button>
         </div>
         <div id="dictInfo" class="page-sub" style="margin-top:10px"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-title">
-          ComfyUI（一键出图）
-          <span class="spacer"></span>
-          <button id="btnComfyInspect" class="small">识别节点</button>
-          <button id="btnComfyTest" class="small">测试连接</button>
-        </div>
-        <div class="field">
-          <label>地址</label>
-          <input id="comfyUrl" class="mono" placeholder="http://127.0.0.1:8188">
-        </div>
-        <div class="field">
-          <label>工作流（API 格式 JSON）—— 在 ComfyUI 菜单「工作流 → 导出（API）」后，整段粘到这里</label>
-          <textarea id="comfyWorkflow" rows="8" class="mono" placeholder='{"3":{"class_type":"KSampler","inputs":{...}}}'></textarea>
-        </div>
-        <div class="grid2">
-          <div class="field">
-            <label>正向节点 id（留空自动识别）</label>
-            <input id="comfyPosNode" class="mono" placeholder="例如 6">
-          </div>
-          <div class="field">
-            <label>负向节点 id（留空自动识别）</label>
-            <input id="comfyNegNode" class="mono" placeholder="例如 7">
-          </div>
-        </div>
-        <div id="comfyNodes" class="page-sub" style="margin-top:10px"></div>
-        <div class="row">
-          <button id="btnComfySave" class="primary">保存</button>
-          <span id="comfyMsg" class="page-sub"></span>
-        </div>
       </div>
     </div>
   </div>
