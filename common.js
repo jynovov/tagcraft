@@ -94,10 +94,18 @@ function loadSettings() {
   try { return JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}'); } catch (e) { return {}; }
 }
 function saveSettings(s) { localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); }
+
+/* ---- 历史记录：只保留最近 HISTORY_MAX 条 ---- */
+const HISTORY_MAX = 10;
 function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); } catch (e) { return []; }
+  try {
+    const list = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
+    return (Array.isArray(list) ? list : []).slice(0, HISTORY_MAX);
+  } catch (e) { return []; }
 }
-function saveHistory(list) { localStorage.setItem(LS_HISTORY, JSON.stringify(list.slice(0, 30))); }
+function saveHistory(list) {
+  localStorage.setItem(LS_HISTORY, JSON.stringify((list || []).slice(0, HISTORY_MAX)));
+}
 
 /* ---- 收藏：存的是「描述 + 整套 tag」，不是单个 tag ---- */
 function loadFavs() {

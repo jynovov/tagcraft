@@ -57,6 +57,7 @@ function escapeHtml(s) {
 
 function init() {
   renderSidebar('his');
+  saveHistory(loadHistory());   // 上限改成 10 条后，顺手把库里多出来的旧记录裁掉
   render();
   $('btnClearAll').addEventListener('click', () => {
     if (!confirm('清空全部历史记录？')) return;

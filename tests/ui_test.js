@@ -169,6 +169,19 @@ renderDraftBar();
 chk('切页回来选项数量正确',
     (document.getElementById('draftSel').innerHTML.match(/<option/g) || []).length === drafts.length);
 
+/* ---------- 11. 历史记录只留最近 10 条 ---------- */
+localStorage.clear();
+const many = [];
+for (let i = 0; i < 25; i++) many.push({ text: '记录' + i, pos: ['a'], time: '' });
+saveHistory(many);                       // 最新的一条排在最前
+chk('历史最多保留 10 条', loadHistory().length === 10, String(loadHistory().length));
+chk('保留的是最新的那些',
+    loadHistory()[0].text === '记录0' && loadHistory()[9].text === '记录9',
+    loadHistory()[9] ? loadHistory()[9].text : '');
+chk('超出的旧记录没被保留', loadHistory().every(h => h.text !== '记录10'));
+saveHistory([]);
+chk('清空历史可用', loadHistory().length === 0);
+
 return R;
 })();`;
 
