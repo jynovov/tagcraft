@@ -21,22 +21,23 @@ function render() {
   }
 
   $('list').innerHTML = list.map((f, i) => {
-    const pos = [].concat(f.pos || []);
-    const preview = pos.slice(0, 16).join(', ') + (pos.length > 16 ? ' …' : '');
+    const q = f.quality || [], p = f.pos || [], n = f.neg || [];
+    const all = [].concat(q, p);
     const text = String(f.text || '').replace(/\s+/g, ' ').trim();
-    return `<div class="hcard">
-      <div class="htop">
-        <span class="ftitle">${escapeHtml(text.slice(0, 34)) || escapeHtml(f.title || '未命名')}</span>
-        <span class="spacer" style="flex:1"></span>
+    return `<div class="fcard">
+      <div class="fhead">
+        <span class="ftitle">${escapeHtml(text.slice(0, 30)) || escapeHtml(f.title || '未命名')}</span>
+        <span class="fmeta">质量词 ${q.length} · 正向 ${p.length} · 负向 ${n.length}</span>
+        <span class="spacer"></span>
         <span class="htime">${f.time || ''}</span>
       </div>
-      <div class="htext">${escapeHtml(text.slice(0, 160))}${text.length > 160 ? '…' : ''}</div>
-      <div class="htags">质量词 ${(f.quality || []).length} · 正向 ${(f.pos || []).length} · 负向 ${(f.neg || []).length}　｜　${escapeHtml(preview)}</div>
-      <div class="htop" style="margin-top:8px">
+      <div class="ftext">${escapeHtml(text.length > 320 ? text.slice(0, 320) + '…' : text) || '（没有填描述）'}</div>
+      <div class="ftags">${escapeHtml(all.join(', ')) || '（没有 tag）'}</div>
+      <div class="frow">
         <button class="small primary" data-load="${i}">载入生成页</button>
         <button class="small" data-copy="${i}">复制正向</button>
         <button class="small" data-copyneg="${i}">复制负向</button>
-        <span class="spacer" style="flex:1"></span>
+        <span class="spacer"></span>
         <button class="small ghost danger" data-del="${i}">删除</button>
       </div>
     </div>`;

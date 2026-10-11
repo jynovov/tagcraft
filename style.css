@@ -66,6 +66,7 @@ a.page-sub:hover{color:var(--accent)}
 @media (max-width:1080px){.layout{grid-template-columns:minmax(0,1fr)}}
 .col{display:flex;flex-direction:column;gap:16px;min-width:0}
 .stack{display:flex;flex-direction:column;gap:16px;max-width:880px}
+.stack.wide{max-width:min(1560px,100%)}
 
 /* ---------------- 卡片 ---------------- */
 .card{
@@ -229,7 +230,8 @@ button.wide{flex:1;min-width:120px;padding:11px 18px;font-size:13.5px}
 .notes.show{display:block}
 
 /* ---------------- 查词结果 ---------------- */
-.list{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:300px;overflow-y:auto}
+.list{display:flex;flex-direction:column;gap:6px;margin-top:10px;min-width:0}
+.list.scroll{max-height:300px;overflow-y:auto}
 .item{
   display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);
   border-radius:10px;background:#fffcf7;font-size:12.5px;min-width:0
@@ -254,7 +256,24 @@ button.wide{flex:1;min-width:120px;padding:11px 18px;font-size:13.5px}
 .ftitle{font-weight:600;font-size:13.5px;color:#6b4a2c}
 .htext{font-size:12.5px;color:#7d6753;margin:7px 0 5px;white-space:pre-wrap;word-break:break-word}
 .htags{font-family:Consolas,monospace;font-size:11.5px;color:var(--dim);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  line-height:1.7;word-break:break-word}
+
+/* ---------------- 收藏页：宽屏多列，卡片铺满 ---------------- */
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(430px,1fr));gap:12px;margin-top:0}
+@media (max-width:960px){.fgrid{grid-template-columns:1fr}}
+.fcard{
+  border:1px solid var(--line);border-radius:14px;background:#fffcf7;
+  padding:13px 15px;display:flex;flex-direction:column;gap:9px;min-width:0
+}
+.fcard:hover{border-color:var(--line2);background:#fff}
+.fhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;min-width:0}
+.fhead .spacer,.frow .spacer{flex:1}
+.fmeta{font-size:11.5px;color:var(--accent2);background:var(--accent-soft);
+  border-radius:999px;padding:2px 9px;white-space:nowrap}
+.ftext{font-size:12.5px;color:#7d6753;white-space:pre-wrap;word-break:break-word;line-height:1.6}
+.ftags{font-family:Consolas,monospace;font-size:11.5px;color:#8b7660;
+  line-height:1.75;word-break:break-word}
+.frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:2px}
 
 /* ---------------- 使用步骤 ---------------- */
 .howto{margin:0;padding-left:20px;color:#6b5644;font-size:13px;line-height:1.95}
