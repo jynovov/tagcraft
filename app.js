@@ -17,56 +17,190 @@ const state = {
 const arr = (kind) => kind === 'q' ? state.quality
   : kind === 'pos' ? state.positive : state.negative;
 
-/* ---------------------------------------------------------------- 草稿自动保存
- * 生成页的整套结果（描述 + 三组 tag + 轨迹 + 评分）都写进 localStorage，
- * 切到别的页面再回来能原样恢复；只有点「清空」才会真正丢掉。            */
+/* ---------------------------------------------------------------- 草稿箱
+ * 可同时保存多份方案（描述 + 三组 tag + 轨迹 + 评分），顶部随时切换。
+ * 任何改动都会自动写进「当前草稿」，所以切页、切草稿都不丢东西。      */
 
-const LS_WORK = 'tagcraft.work';
+let drafts = [];     // 全部草稿
+let curId = null;    // 当前草稿 id
 
-function saveWork() {
-  const has = $('inputText').value.trim() || state.quality.length ||
-              state.positive.length || state.negative.length || state.unknown.length;
-  if (!has) { clearWork(); return; }   // 空页面不留草稿（否则点「清空」会把它写回来）
-  try {
-    localStorage.setItem(LS_WORK, JSON.stringify({
-      text: $('inputText').value,
-      maxTags: $('maxTags').value,
-      agent: $('useAgent').checked,
-      weight: $('useWeight').checked,
-      quality: state.quality,
-      positive: state.positive,
-      negative: state.negative,
-      unknown: state.unknown,
-      notes: state.notes,
-      stats: state.stats,
-      trace: state.trace,
-      review: state.review,
-      ts: Date.now()
-    }));
-  } catch (e) { /* 存不下就算了，不影响使用 */ }
+const curDraft = () => drafts.find(d => d.id === curId) || null;
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+/** 还没命名时用描述开头自动起个名字 */
+function autoName(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t ? t.slice(0, 14) : '新草稿';
+}
+
+function draftPayload() {
+  return {
+    text: $('inputText').value,
+    maxTags: $('maxTags').value,
+    agent: $('useAgent').checked,
+    weight: $('useWeight').checked,
+    quality: state.quality,
+    positive: state.positive,
+    negative: state.negative,
+    unknown: state.unknown,
+    notes: state.notes,
+    stats: state.stats,
+    trace: state.trace,
+    review: state.review
+  };
+}
+
+function emptyDraft(name) {
+  return {
+    id: newDraftId(), name: name || '新草稿', time: Date.now(),
+    text: '', maxTags: '40', agent: true, weight: false,
+    quality: [], positive: [], negative: [], unknown: [],
+    notes: '', stats: null, trace: [], review: null
+  };
+}
+
+/** 把界面上的一切写进当前草稿（render 时自动调用） */
+function saveWork() {
+  const d = curDraft();
+  if (!d) return;
+  Object.assign(d, draftPayload(), { time: Date.now() });
+  if (!d.name || d.name === '新草稿' || /^草稿 \d+$/.test(d.name)) {
+    if (String(d.text || '').trim()) d.name = autoName(d.text);
+  }
+  saveWorks(drafts);
+  renderDraftBar();
+}
+
+/** 把当前草稿读回界面 */
 function restoreWork() {
-  let w = null;
-  try { w = JSON.parse(localStorage.getItem(LS_WORK) || 'null'); } catch (e) { w = null; }
-  if (!w) return false;
-  $('inputText').value = w.text || '';
-  if (w.maxTags) $('maxTags').value = w.maxTags;
-  $('useAgent').checked = w.agent !== false;
-  $('useWeight').checked = !!w.weight;
-  state.quality = w.quality || [];
-  state.positive = w.positive || [];
-  state.negative = w.negative || [];
-  state.unknown = w.unknown || [];
-  state.notes = w.notes || '';
-  state.stats = w.stats || null;
-  state.trace = w.trace || [];
-  state.review = w.review || null;
+  const d = curDraft();
+  if (!d) return false;
+  $('inputText').value = d.text || '';
+  $('maxTags').value = d.maxTags || '40';
+  $('useAgent').checked = d.agent !== false;
+  $('useWeight').checked = !!d.weight;
+  state.quality = d.quality || [];
+  state.positive = d.positive || [];
+  state.negative = d.negative || [];
+  state.unknown = d.unknown || [];
+  state.notes = d.notes || '';
+  state.stats = d.stats || null;
+  state.trace = d.trace || [];
+  state.review = d.review || null;
   return true;
 }
 
-function clearWork() {
-  try { localStorage.removeItem(LS_WORK); } catch (e) { /* ignore */ }
+/** 首屏准备：读草稿、迁移旧版单草稿、确定当前草稿 */
+function initDrafts() {
+  drafts = loadWorks();
+  if (!drafts.length) {
+    const d = emptyDraft('草稿 1');
+    try {
+      const old = localStorage.getItem(LS_WORK_OLD);
+      if (old) {
+        Object.assign(d, JSON.parse(old));
+        d.id = newDraftId();
+        if (String(d.text || '').trim()) d.name = autoName(d.text);
+        else d.name = '上次的结果';
+        localStorage.removeItem(LS_WORK_OLD);
+      }
+    } catch (e) { /* ignore */ }
+    drafts = [d];
+    saveWorks(drafts);
+  }
+  curId = localStorage.getItem(LS_CUR);
+  if (!drafts.some(d => d.id === curId)) curId = drafts[0].id;
+  localStorage.setItem(LS_CUR, curId);
+}
+
+function renderDraftBar() {
+  const sel = $('draftSel');
+  sel.innerHTML = drafts.map(d => {
+    const n = (d.quality || []).length + (d.positive || []).length;
+    return `<option value="${d.id}"${d.id === curId ? ' selected' : ''}>` +
+      escHtml(d.name || '未命名') + (n ? ' · ' + n + ' tag' : '') + '</option>';
+  }).join('');
+  const d = curDraft();
+  $('draftHint').textContent = d && d.time ? '最后修改 ' + new Date(d.time).toLocaleString() : '';
+}
+
+function resetView() {
+  $('inputText').value = '';
+  state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
+  state.notes = ''; state.stats = null; state.trace = []; state.review = null;
+  $('searchResults').innerHTML = '';
+}
+
+function switchDraft(id) {
+  if (!id || id === curId) return;
+  saveWork();
+  curId = id;
+  localStorage.setItem(LS_CUR, curId);
+  restoreWork();
+  render();
+  renderDraftBar();
+  toast('已切到「' + (curDraft().name || '未命名') + '」');
+}
+
+function newDraft() {
+  saveWork();
+  const d = emptyDraft('草稿 ' + (drafts.length + 1));
+  drafts.unshift(d);
+  saveWorks(drafts);
+  curId = d.id;
+  localStorage.setItem(LS_CUR, curId);
+  resetView();
+  render();
+  renderDraftBar();
+  $('inputText').focus();
+  toast('新建了「' + d.name + '」');
+}
+
+function copyDraft() {
+  saveWork();
+  const src = curDraft();
+  if (!src) return;
+  const d = JSON.parse(JSON.stringify(src));
+  d.id = newDraftId();
+  d.name = (src.name || '未命名') + ' 副本';
+  d.time = Date.now();
+  drafts.unshift(d);
+  saveWorks(drafts);
+  curId = d.id;
+  localStorage.setItem(LS_CUR, curId);
+  render();
+  renderDraftBar();
+  toast('已复制为「' + d.name + '」');
+}
+
+function renameDraft() {
+  const d = curDraft();
+  if (!d) return;
+  const name = prompt('这份草稿叫什么？', d.name || '');
+  if (name === null) return;
+  d.name = String(name).trim() || d.name;
+  saveWorks(drafts);
+  renderDraftBar();
+  toast('已改名为「' + d.name + '」');
+}
+
+function delDraft() {
+  const d = curDraft();
+  if (!d) return;
+  if (!confirm('删除草稿「' + (d.name || '未命名') + '」？此操作不可恢复。')) return;
+  drafts = drafts.filter(x => x.id !== d.id);
+  if (!drafts.length) drafts = [emptyDraft('草稿 1')];
+  saveWorks(drafts);
+  curId = drafts[0].id;
+  localStorage.setItem(LS_CUR, curId);
+  resetView();
+  restoreWork();
+  render();
+  renderDraftBar();
+  toast('已删除');
 }
 
 /* ---------------------------------------------------------------- 渲染 */
@@ -580,14 +714,16 @@ function init() {
 
   $('btnGenerate').addEventListener('click', generate);
   $('btnClear').addEventListener('click', () => {
-    $('inputText').value = '';
-    state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
-    state.notes = ''; state.stats = null; state.trace = []; state.review = null;
-    $('searchResults').innerHTML = '';
-    clearWork();
+    resetView();
+    saveWork();
     render();
-    toast('已清空');
+    toast('已清空（草稿还留着）');
   });
+  $('draftSel').addEventListener('change', e => switchDraft(e.target.value));
+  $('btnNewDraft').addEventListener('click', newDraft);
+  $('btnCopyDraft').addEventListener('click', copyDraft);
+  $('btnRenameDraft').addEventListener('click', renameDraft);
+  $('btnDelDraft').addEventListener('click', delDraft);
   $('btnSearch').addEventListener('click', doSearch);
   $('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('inputText').addEventListener('keydown', e => {
@@ -614,21 +750,26 @@ function init() {
   $('outPos').addEventListener('input', () => syncFromText('outPos', 'positive'));
   $('outNeg').addEventListener('input', () => syncFromText('outNeg', 'negative'));
 
-  // 从收藏页 / 历史页带过来的记录（优先于草稿）
+  // 草稿箱：读草稿 / 迁移旧单草稿 / 选定当前草稿
+  initDrafts();
+
+  // 从收藏页 / 历史页带过来的记录（载入到当前草稿）
   try {
     const p = localStorage.getItem(LS_PENDING);
     if (p) {
       localStorage.removeItem(LS_PENDING);
       loadRecord(JSON.parse(p));
+      renderDraftBar();
       return;
     }
   } catch (e) { /* ignore */ }
 
-  // 恢复上次没做完的工作（描述 + 结果 + 轨迹）
+  // 恢复当前草稿
   const restored = restoreWork();
   render();
-  if (restored && (state.positive.length || state.negative.length || state.quality.length)) {
-    toast('已恢复上次的结果');
+  renderDraftBar();
+  if (restored) {
+    toast('已恢复「' + (curDraft().name || '未命名') + '」');
   }
 }
 

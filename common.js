@@ -137,6 +137,24 @@ function loadComfy() {
 }
 function saveComfy(c) { localStorage.setItem(LS_COMFY, JSON.stringify(c)); }
 
+/* ---- 草稿箱：可以同时存在多份方案，各自独立保存 ---- */
+const LS_WORKS = 'tagcraft.works';   // 全部草稿
+const LS_CUR = 'tagcraft.cur';       // 当前草稿 id
+const LS_WORK_OLD = 'tagcraft.work'; // 旧版单草稿（首次运行会迁移过来）
+
+function loadWorks() {
+  try {
+    const list = JSON.parse(localStorage.getItem(LS_WORKS) || '[]');
+    return Array.isArray(list) ? list.filter(d => d && d.id) : [];
+  } catch (e) { return []; }
+}
+function saveWorks(list) {
+  try { localStorage.setItem(LS_WORKS, JSON.stringify(list.slice(0, 60))); } catch (e) { /* ignore */ }
+}
+function newDraftId() {
+  return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 function isQuality(chip) {
   return chip.category === 5 || chip.policy === 'quality' ||
          QUALITY_TAGS.has(String(chip.tag || '').toLowerCase());
