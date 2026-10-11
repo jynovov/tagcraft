@@ -9,7 +9,9 @@ const state = {
   negative: [],   // 负向 tag
   unknown: [],    // 未识别：{tag, suggestions, kind}
   notes: '',
-  stats: null     // {model, checked, unknown, ms}
+  stats: null,    // {model, checked, unknown, ms, tool_calls}
+  trace: [],      // Agent 工具调用轨迹
+  review: null    // 自省评审记录
 };
 
 const arr = (kind) => kind === 'q' ? state.quality
@@ -44,17 +46,66 @@ function render() {
   const s = $('genStats');
   if (state.stats) {
     const t = state.stats;
-    s.textContent = '大模型 ' + t.model + ' 次 · 词表工具校验 ' + t.checked + ' 个 tag · 其中 ' +
-      t.unknown + ' 个不存在' + (t.ms ? ' · 耗时 ' + (t.ms / 1000).toFixed(1) + ' 秒' : '');
+    s.textContent = '大模型 ' + t.model + ' 次' +
+      (t.tool_calls ? ' · 工具调用 ' + t.tool_calls + ' 次' : '') +
+      ' · 词表工具校验 ' + t.checked + ' 个 tag · 其中 ' + t.unknown + ' 个不存在' +
+      (t.ms ? ' · 耗时 ' + (t.ms / 1000).toFixed(1) + ' 秒' : '');
     s.classList.add('show');
   } else {
     s.classList.remove('show');
   }
 
+  renderTrace();
+  renderReview();
+
   renderOut();
   renderFavs();
   bindTags();
   bindUnknown();
+}
+
+/* ---------------------------------------------------------------- Agent 轨迹 / 自省 */
+
+function renderTrace() {
+  const box = $('trace');
+  const tr = state.trace || [];
+  if (!tr.length) { box.classList.remove('show'); box.innerHTML = ''; return; }
+  box.classList.add('show');
+  box.innerHTML = '<div class="trace-title">智能体工具调用轨迹（' + tr.length + ' 步）</div>' +
+    tr.map(s => `<div class="step ${s.tool === '降级' ? 'warn' : ''}">
+      <span class="rnd">${s.round}</span>
+      <span class="tool">${s.tool}</span>
+      <span class="sum">${s.summary || ''}</span>
+    </div>`).join('');
+}
+
+function renderReview() {
+  const box = $('review');
+  const rv = state.review;
+  if (!rv) { box.classList.remove('show'); box.innerHTML = ''; return; }
+  box.classList.add('show');
+  if (rv.error) {
+    box.innerHTML = '<div class="trace-title">自省评审失败</div><div class="step warn">' +
+      rv.error + '</div>';
+    return;
+  }
+  const rounds = rv.rounds || [];
+  box.innerHTML = '<div class="trace-title">自省评审（' + rounds.length + ' 轮' +
+    (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '') + '）</div>' +
+    rounds.map((r, i) => {
+      const prev = i > 0 ? rounds[i - 1].score : null;
+      const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
+      const probs = (r.problems || []).length
+        ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
+      const miss = (r.missing || []).length
+        ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
+      return `<div class="step">
+        <span class="rnd">${i + 1}</span>
+        <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
+        <span class="sum">改动 ${r.changed || 0} 个 tag${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
+        ${probs}${miss}
+      </div>`;
+    }).join('');
 }
 
 function fmt(c, withWeight) {
@@ -251,13 +302,14 @@ async function addByNames(names, kind) {
 async function generate() {
   const text = $('inputText').value.trim();
   if (!text) { toast('先写点描述', true); return; }
+  const agent = $('useAgent').checked;
   const btn = $('btnGenerate');
   btn.disabled = true;
-  toast('正在生成…');
+  toast(agent ? '智能体运行中：会自己查词表并自省…' : '正在生成…');
   const st = loadSettings();
   const t0 = Date.now();
   try {
-    const r = await api('/api/generate', {
+    const r = await api(agent ? '/api/agent' : '/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -265,18 +317,25 @@ async function generate() {
         extra_rules: $('extraRules').value.trim(),
         max_tags: +$('maxTags').value || 40,
         temperature: st.temperature ? +st.temperature : 0.6,
+        max_rounds: st.agentRounds ? +st.agentRounds : 6,
+        reflect: st.reflect !== false,
+        reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
         api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
       })
     });
     if (r.error && !r.parsed) {
       toast(r.error, true);
       state.notes = r.raw ? '模型原文：' + String(r.raw).slice(0, 300) : '';
+      state.trace = r.trace || [];
+      state.review = r.review || null;
       render();
       return;
     }
     state.quality = [];
     state.positive = [];
     state.unknown = [];
+    state.trace = r.trace || [];
+    state.review = r.review || null;
     for (const h of (r.positive || [])) {
       const c = { tag: h.tag, cn: h.cn || '', category: h.category,
                   post_count: h.post_count || 0, weight: 1, policy: h.policy };
@@ -288,15 +347,24 @@ async function generate() {
       post_count: h.post_count || 0, weight: 1, policy: h.policy }));
     (r.negative_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'neg' })));
     state.notes = r.notes || '';
+    const box = r.stats || {};
     state.stats = {
-      model: 1,
-      checked: (r.positive || []).length + (r.negative || []).length +
-               (r.positive_unknown || []).length + (r.negative_unknown || []).length,
-      unknown: (r.positive_unknown || []).length + (r.negative_unknown || []).length,
+      model: box.llm_calls || 1,
+      tool_calls: box.tool_calls || 0,
+      checked: box.checked != null ? box.checked
+        : (r.positive || []).length + (r.negative || []).length +
+          (r.positive_unknown || []).length + (r.negative_unknown || []).length,
+      unknown: box.unknown != null ? box.unknown
+        : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
       ms: Date.now() - t0
     };
-    toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
-          ' · 负向 ' + state.negative.length);
+    if (agent && r.tools_used === false) {
+      toast('该接口不支持工具调用，已降级为单次生成', true);
+    } else {
+      toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
+            ' · 负向 ' + state.negative.length +
+            (state.stats.tool_calls ? ' · 工具调用 ' + state.stats.tool_calls + ' 次' : ''));
+    }
     render();
     pushHistory(text);
   } catch (e) {
@@ -505,7 +573,7 @@ function init() {
   $('btnClear').addEventListener('click', () => {
     $('inputText').value = '';
     state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
-    state.notes = ''; state.stats = null; render();
+    state.notes = ''; state.stats = null; state.trace = []; state.review = null; render();
   });
   $('btnSearch').addEventListener('click', doSearch);
   $('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });

@@ -166,6 +166,20 @@ def main():
         check("质量词白名单放行", st == 200 and "quality" in body, "HTTP %s" % st)
         check("编造的 tag 被标出", st == 200 and "zzz_fake_tag_zzz" in body)
 
+        say("智能体（Agent 模式）：")
+        st, body = post("/api/agent", {"text": ""})
+        check("没输入描述时报错", st == 400 and "描述" in body, "HTTP %s" % st)
+
+        st, body = post("/api/agent", {"text": "一个女孩在雨里撑伞",
+                                       "api": {"api_base": "http://127.0.0.1:9/v1/chat/completions",
+                                               "api_key": "", "model": "x"}})
+        check("没配 API Key 时给出提示", st == 400 and "API Key" in body, "HTTP %s" % st)
+
+        st, body = post("/api/agent", {"text": "一个女孩在雨里撑伞",
+                                       "api": {"api_base": "http://127.0.0.1:9/v1/chat/completions",
+                                               "api_key": "dummy", "model": "x"}})
+        check("接口不通时返回错误", st == 500, "HTTP %s" % st)
+
         say("ComfyUI 对接：")
         st, body = get("/api/comfy/ping?url=http://127.0.0.1:9")
         check("ComfyUI 没开时给友好报错", st == 400 and "连不上" in body, "HTTP %s" % st)

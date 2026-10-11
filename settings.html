@@ -45,6 +45,28 @@
       </div>
 
       <div class="card">
+        <div class="card-title">智能体（Agent 模式）</div>
+        <div class="grid2">
+          <div class="field">
+            <label>工具调用最大轮数</label>
+            <input id="agentRounds" type="number" min="1" max="12" value="6">
+          </div>
+          <div class="field">
+            <label>自省轮数（0 = 关闭）</label>
+            <input id="reflectRounds" type="number" min="0" max="4" value="2">
+          </div>
+        </div>
+        <label class="inline" style="margin-top:10px">
+          <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写
+        </label>
+        <div class="page-sub" style="margin-top:8px">
+          生成页勾选「Agent 模式」后生效：模型自己决定调用词表工具（search_tags / get_tag /
+          validate_tags / suggest_tags）查证写法，最多跑 N 轮；随后由审核环节打分（0-100）
+          并输出修正后的 tag。轮数越多越稳，但更慢也更费 token。
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-title">生成默认值</div>
         <div class="field" style="max-width:220px">
           <label>正向 tag 上限</label>

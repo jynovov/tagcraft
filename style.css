@@ -222,3 +222,30 @@ button.star{color:#b9cadb;padding:5px 9px}
 button.star.on{color:#d98f2b;border-color:#f0d9b0;background:#fffaf1}
 .tag.fav{cursor:pointer;border-style:dashed}
 .tag.fav:hover{border-color:var(--accent);background:var(--accent-soft)}
+
+/* ---------------- 智能体：工具调用轨迹 / 自省评审 ---------------- */
+.trace,.review{
+  display:none;margin-bottom:12px;border-radius:10px;padding:10px 12px;
+  background:#f7fbff;border:1px solid var(--line);
+}
+.trace.show,.review.show{display:block}
+.review{background:#fffdf6;border-color:#f2e4c4}
+.trace-title{font-size:12.5px;font-weight:600;color:#3d6b96;margin-bottom:8px}
+.review .trace-title{color:#a3761f}
+.step{
+  display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;
+  font-size:12.5px;color:#4a6b85;padding:4px 0;border-top:1px dashed #e2edf8;
+}
+.review .step{border-top-color:#f1e7d2}
+.step:first-of-type{border-top:none}
+.step .rnd{
+  flex:0 0 18px;height:18px;line-height:18px;text-align:center;border-radius:50%;
+  background:var(--accent-soft);color:var(--accent);font-size:11px;
+}
+.review .step .rnd{background:#fdf1d8;color:#b9861f}
+.step .tool{font-family:Consolas,monospace;color:#2f5d80;font-weight:600}
+.review .step .tool{color:#b9861f}
+.step .sum{color:#7a90a4}
+.step .prob{flex:1 0 100%;color:#8a6d3b;padding-left:26px}
+.step.warn{color:#c4554c}
+.step.warn .tool{color:#c4554c}

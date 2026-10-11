@@ -33,6 +33,10 @@
           <div class="row">
             <button id="btnGenerate" class="primary">生成 tag</button>
             <button id="btnClear" class="ghost">清空</button>
+            <label class="inline" style="margin-left:auto"
+                   title="让模型自己决定查词表，并自我评审重写">
+              <input id="useAgent" type="checkbox" checked> Agent 模式
+            </label>
           </div>
         </div>
 
@@ -74,6 +78,8 @@
             <button id="btnValidate" class="small ghost">校验</button>
           </div>
           <div id="genStats" class="stats"></div>
+          <div id="trace" class="trace"></div>
+          <div id="review" class="review"></div>
           <div id="notes" class="notes"></div>
 
           <div class="group">

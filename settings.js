@@ -34,6 +34,10 @@ function fill() {
   $('comfyWorkflow').value = c.workflow || '';
   $('comfyPosNode').value = c.positiveNode || '';
   $('comfyNegNode').value = c.negativeNode || '';
+
+  $('agentRounds').value = s.agentRounds || 6;
+  $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
+  $('reflect').checked = s.reflect !== false;
 }
 
 function collect() {
@@ -42,7 +46,10 @@ function collect() {
     model: $('model').value.trim(),
     apiKey: $('apiKey').value.trim(),
     temperature: $('temperature').value,
-    maxTags: +$('maxTags').value || 40
+    maxTags: +$('maxTags').value || 40,
+    agentRounds: +$('agentRounds').value || 6,
+    reflectRounds: +$('reflectRounds').value || 0,
+    reflect: $('reflect').checked
   };
 }
 

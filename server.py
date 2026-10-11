@@ -713,6 +713,344 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6):
     return content, parsed, body.get("usage") or {}
 
 
+# ---------------------------------------------------------------- 智能体：工具 + 循环
+
+AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tags",
+            "description": "在 33 万条 Danbooru 中英对照词表里搜索 tag，支持中文、英文、别名"
+                           "（例如「过膝袜」「thighhighs」「v_sign」）。不确定某个要素的英文写法时用它。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要查的中文或英文关键词"},
+                    "limit": {"type": "integer", "description": "最多返回几条，默认 8"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_tag",
+            "description": "精确查询一个英文 tag 是否存在，返回分类、热度、中文名。"
+                           "写进提示词之前用它确认拼写。",
+            "parameters": {"type": "object",
+                           "properties": {"name": {"type": "string", "description": "英文 tag"}},
+                           "required": ["name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_tags",
+            "description": "批量校验一组 tag（一次最多 60 个），返回哪些存在、哪些不存在；"
+                           "不存在的会附带相近候选。批量确认拼写用它。",
+            "parameters": {
+                "type": "object",
+                "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
+                "required": ["tags"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_tags",
+            "description": "某个 tag 写法拿不准时，给出词表里最相近的几个候选。",
+            "parameters": {"type": "object",
+                           "properties": {"name": {"type": "string", "description": "拿不准的写法"}},
+                           "required": ["name"]},
+        },
+    },
+]
+
+AGENT_EXTRA = """
+
+【你可以调用的本地工具】
+你手边有一套 Danbooru 词表工具，随时可以调用：
+  · search_tags(query)      —— 中文/英文/别名搜词表，拿到真实存在的写法
+  · get_tag(name)           —— 精确确认某个英文 tag 是否存在
+  · validate_tags([...])    —— 批量校验，一次最多 60 个
+  · suggest_tags(name)      —— 拼错或不存在时拿相近候选
+建议流程（不必死板遵守，但不确定时务必查）：
+  1. 先通读描述，列出画面里所有可画的要素（人物/外貌/表情动作/服装/场景/光照/镜头/风格）
+  2. 凡是拿不准英文写法的要素，用 search_tags 查（中文词直接查，词表里带中文）
+  3. 把打算使用的 tag 用 validate_tags 批量确认一遍，不存在的换成候选或删掉
+  4. 确认无误后，输出最终 JSON
+注意：查证要节制，最多查询 4~6 次；确认完就立刻输出结果，不要反复查同一个词。
+你最后一次回复必须是最终 JSON（形如 {"positive": [...], "negative": [...], "notes": "..."}），
+不要再附带任何工具调用。
+"""
+
+CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核员。用户会给你：
+① 一段中文画面描述；② 目前生成的 tag 清单（正向/负向）；③ 词表校验报告。
+
+请严格审核，并只输出一个 JSON（不要解释、不要代码块）：
+{
+  "score": 0-100 的整数（综合评分：要素覆盖度、tag 有效性、排序合理性、有无矛盾或冗余）,
+  "problems": ["具体问题，最多 5 条，没有就空数组"],
+  "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条"],
+  "positive": ["修正后的正向 tag，按重要性从高到低"],
+  "negative": ["修正后的负向 tag"]
+}
+
+审核要点：
+- 描述里的关键要素是否都覆盖了（人数构图/外貌/表情动作/服装/场景/光照/镜头/风格）
+- 有没有互相矛盾或重复的 tag（如同时 solo 和 2girls、短发和长发）
+- 有没有模型不认识的自造词；有没有把「背景/场景」类 tag 排到人物前面
+- 数量是否合理（正向 25~45 个，负向 4~12 个）
+如果你认为已经足够好，可以把 positive/negative 原样返回，并给出高分。
+"""
+
+
+def _brief_tag(h):
+    """把一条词表记录压成短字符串，喂给模型省 token。"""
+    if not h:
+        return ""
+    cn = h.get("cn") or ""
+    pc = h.get("post_count") or 0
+    return "%s%s%s" % (h.get("tag"), ("·" + cn) if cn else "",
+                       ("·%d次" % pc) if pc else "")
+
+
+def run_tool(name, args):
+    """执行一个工具调用，返回 (给模型的文本, 给界面显示的摘要)。"""
+    args = args if isinstance(args, dict) else {}
+    if name == "search_tags":
+        q = str(args.get("query") or "").strip()
+        limit = int(args.get("limit") or 8)
+        rows = search_tags(q, limit=max(1, min(limit, 20)))
+        if not rows:
+            return "没有找到「%s」。换个说法，或用 suggest_tags 试试。" % q, "查「%s」→ 无结果" % q
+        text = "\n".join(_brief_tag(r) for r in rows)
+        return ("找到 %d 条：\n%s" % (len(rows), text),
+                "查「%s」→ %s" % (q, "、".join(str(r.get("tag")) for r in rows[:4])))
+
+    if name == "get_tag":
+        n = str(args.get("name") or "").strip()
+        hit = get_tag(n)
+        if not hit and n.lower() in QUALITY_TAGS:
+            return ("%s 是模型侧质量词（不在 Danbooru 词表里，但可以用）" % n, "精确查 %s → 质量词" % n)
+        if hit:
+            return ("存在：%s，分类 %s，热度 %s 次" % (hit.get("tag"), hit.get("category_name"),
+                                                  hit.get("post_count")),
+                    "精确查 %s → 存在" % n)
+        sug = suggest_for(n, 5)
+        return ("不存在：%s。相近候选：%s" % (n, "、".join(str(s.get("tag")) for s in sug) or "无"),
+                "精确查 %s → 不存在（候选 %s）" % (n, "、".join(str(s.get("tag")) for s in sug[:3]) or "无"))
+
+    if name == "validate_tags":
+        tags = [str(t).strip() for t in (args.get("tags") or []) if str(t).strip()][:60]
+        valid, unknown = validate_tags(tags)
+        lines = ["存在 %d 个，不存在 %d 个。" % (len(valid), len(unknown))]
+        if unknown:
+            for u in unknown[:12]:
+                sug = "、".join(str(s.get("tag")) for s in (u.get("suggestions") or [])[:3])
+                lines.append("  ✗ %s（候选：%s）" % (u["tag"], sug or "无"))
+        return ("\n".join(lines),
+                "校验 %d 个 → 不存在 %d 个（%s）" % (len(tags), len(unknown),
+                                                "、".join(u["tag"] for u in unknown[:3]) or "无"))
+
+    if name == "suggest_tags":
+        n = str(args.get("name") or "").strip()
+        sug = suggest_for(n, 6)
+        return ("候选：%s" % "、".join(_brief_tag(s) for s in sug) if sug else "没有相近候选",
+                "候选「%s」→ %s" % (n, "、".join(str(s.get("tag")) for s in sug[:3]) or "无"))
+
+    return "未知工具：%s" % name, "未知工具 %s" % name
+
+
+def _pick_tag_lists(parsed):
+    pos = [str(t).strip() for t in ((parsed or {}).get("positive") or []) if str(t).strip()]
+    neg = [str(t).strip() for t in ((parsed or {}).get("negative") or []) if str(t).strip()]
+    return pos, neg
+
+
+def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
+                   max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True):
+    """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。"""
+    model = (cfg.get("model") or "").strip()
+    system = SYSTEM_PROMPT + AGENT_EXTRA
+    if extra_rules:
+        system += "\n补充要求：" + extra_rules + "\n"
+    if max_tags:
+        system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
+
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": text}]
+    trace, stats = [], {"llm_calls": 0, "tool_calls": 0}
+    tools_ok = bool(use_tools)
+    content, parsed = "", None
+
+    for rnd in range(1, max(1, int(max_rounds)) + 1):
+        payload = {"model": model, "messages": messages,
+                   "temperature": float(temperature), "stream": False}
+        if tools_ok:
+            payload["tools"] = AGENT_TOOLS
+            payload["tool_choice"] = "auto"
+        try:
+            body = _post_chat(cfg, payload)
+        except RuntimeError as e:
+            # 有些接口/本地模型不支持 tools，降级成单次生成，别让用户卡住
+            if tools_ok and ("tool" in str(e).lower() or "function" in str(e).lower()):
+                tools_ok = False
+                trace.append({"round": rnd, "tool": "降级", "args": {},
+                              "summary": "该接口不支持工具调用，已退回单次生成"})
+                continue
+            raise
+        stats["llm_calls"] += 1
+        try:
+            msg = body["choices"][0]["message"]
+        except Exception:
+            raise RuntimeError("接口返回格式异常：%s" % json.dumps(body, ensure_ascii=False)[:300])
+
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            content = msg.get("content") or ""
+            parsed = _extract_json(content)
+            if parsed:
+                trace.append({"round": rnd, "tool": "输出结果", "args": {},
+                              "summary": "模型给出最终 tag"})
+                break
+            # 既没有工具调用也没有 JSON：把这段当回答，让模型继续
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user",
+                             "content": "请按约定格式输出最终 JSON（positive / negative / notes）。"})
+            if rnd == int(max_rounds):
+                break
+            continue
+
+        # 记录了工具调用：先回填 assistant 消息，再逐个执行
+        messages.append({"role": "assistant", "content": msg.get("content") or "",
+                         "tool_calls": calls})
+        for c in calls:
+            fn = (c.get("function") or {})
+            fname = str(fn.get("name") or "")
+            try:
+                fargs = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                fargs = {}
+            out, brief = run_tool(fname, fargs)
+            stats["tool_calls"] += 1
+            trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
+            messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
+                             "content": out})
+
+    # 轮数用完了还没拿到 JSON：强制它收尾
+    if not parsed:
+        messages.append({"role": "user",
+                         "content": "已经查得足够多了，现在直接输出最终 JSON，不要再调用工具。"})
+        body = _post_chat(cfg, {"model": model, "messages": messages,
+                                "temperature": float(temperature), "stream": False})
+        stats["llm_calls"] += 1
+        try:
+            content = body["choices"][0]["message"].get("content") or ""
+        except Exception:
+            content = ""
+        parsed = _extract_json(content)
+
+    if not parsed or not isinstance(parsed, dict):
+        return {"raw": content, "parsed": None, "trace": trace, "stats": stats,
+                "tools_used": tools_ok,
+                "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
+
+    pos, neg = _pick_tag_lists(parsed)
+    valid, unknown = validate_tags(pos)
+    valid_neg, unknown_neg = validate_tags(neg)
+    stats["checked"] = len(pos) + len(neg)
+    stats["unknown"] = len(unknown) + len(unknown_neg)
+    out = {
+        "parsed": parsed, "raw": content,
+        "positive": valid, "positive_unknown": unknown,
+        "negative": valid_neg, "negative_unknown": unknown_neg,
+        "notes": parsed.get("notes", ""),
+        "trace": trace, "stats": stats, "tools_used": tools_ok,
+        "review": None,
+    }
+    if reflect:
+        try:
+            out["review"] = self_refine(cfg, text, out, rounds=reflect_rounds)
+            # 自省后重新校验一遍
+            pos2 = [h["tag"] for h in out["positive"]]
+            neg2 = [h["tag"] for h in out["negative"]]
+            valid2, unknown2 = validate_tags(pos2)
+            valid_neg2, unknown_neg2 = validate_tags(neg2)
+            out["positive"], out["positive_unknown"] = valid2, unknown2
+            out["negative"], out["negative_unknown"] = valid_neg2, unknown_neg2
+            out["stats"]["checked"] = len(pos2) + len(neg2)
+            out["stats"]["unknown"] = len(unknown2) + len(unknown_neg2)
+        except Exception as e:  # noqa: BLE001
+            out["review"] = {"error": str(e), "rounds": []}
+    return out
+
+
+def self_refine(cfg, text, result, rounds=2, threshold=92):
+    """B：把结果 + 词表校验报告交给模型自评，按需重写。"""
+    model = (cfg.get("model") or "").strip()
+    history = []
+    best = {"score": -1, "positive": None, "negative": None}
+
+    for i in range(1, max(1, int(rounds)) + 1):
+        pos = [h["tag"] for h in result["positive"]] + [u["tag"] for u in result["positive_unknown"]]
+        neg = [h["tag"] for h in result["negative"]] + [u["tag"] for u in result["negative_unknown"]]
+        bad = [u["tag"] for u in result["positive_unknown"]] + \
+              [u["tag"] for u in result["negative_unknown"]]
+        report = "词表校验：%d 个 tag 里 %d 个不在词表：%s" % (
+            len(pos) + len(neg), len(bad), "、".join(bad) or "无")
+        ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n"
+               "【当前负向 tag】\n%s\n\n【%s】\n\n请审核并输出 JSON。"
+               % (text, ", ".join(pos), ", ".join(neg), report))
+        body = _post_chat(cfg, {
+            "model": model,
+            "messages": [{"role": "system", "content": CRITIC_SYSTEM},
+                         {"role": "user", "content": ask}],
+            "temperature": 0.2, "stream": False,
+        })
+        result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
+        try:
+            content = body["choices"][0]["message"].get("content") or ""
+        except Exception:
+            content = ""
+        crit = _extract_json(content)
+        if not crit:
+            history.append({"round": i, "score": None, "problems": ["评审没返回 JSON"], "changed": 0})
+            break
+
+        score = crit.get("score")
+        try:
+            score = int(score)
+        except Exception:
+            score = None
+        new_pos = [str(t).strip() for t in (crit.get("positive") or []) if str(t).strip()]
+        new_neg = [str(t).strip() for t in (crit.get("negative") or []) if str(t).strip()]
+        changed = 0
+        if new_pos or new_neg:
+            old = set(pos) | set(neg)
+            new = set(new_pos) | set(new_neg)
+            changed = len(old ^ new)
+            valid, unknown = validate_tags(new_pos or pos)
+            valid_n, unknown_n = validate_tags(new_neg or neg)
+            result["positive"], result["positive_unknown"] = valid, unknown
+            result["negative"], result["negative_unknown"] = valid_n, unknown_n
+        history.append({"round": i, "score": score,
+                        "problems": (crit.get("problems") or [])[:5],
+                        "missing": (crit.get("missing") or [])[:5],
+                        "changed": changed})
+        if score is not None and score > best["score"]:
+            best = {"score": score, "positive": result["positive"], "negative": result["negative"]}
+        # 收敛条件：分数够高、或这一轮没改动
+        if (score is not None and score >= threshold) or changed == 0:
+            break
+
+    return {"rounds": history,
+            "final_score": history[-1]["score"] if history else None,
+            "iterations": len(history)}
+
+
 # ---------------------------------------------------------------- ComfyUI 对接
 
 
@@ -1088,6 +1426,40 @@ class Handler(BaseHTTPRequestHandler):
                 "notes": parsed.get("notes", ""),
                 "usage": usage,
             })
+
+        if path == "/api/agent":
+            text = (body.get("text") or "").strip()
+            if not text:
+                return self._send(400, {"error": "请先输入中文描述"})
+            cfg = load_config()
+            ui = body.get("api") or {}
+            for k in ("api_base", "api_key", "model"):
+                if (ui.get(k) or "").strip():
+                    cfg[k] = ui[k].strip()
+            if not (cfg.get("api_key") or "").strip():
+                return self._send(400, {
+                    "error": "还没有填 API Key。请在「设置」页填写，"
+                             "或复制 config.example.json 为 config.json 后填入。"
+                })
+            try:
+                res = agent_generate(
+                    cfg, text,
+                    extra_rules=(body.get("extra_rules") or ""),
+                    max_tags=int(body.get("max_tags") or 45),
+                    temperature=float(body.get("temperature") or 0.6),
+                    max_rounds=int(body.get("max_rounds") or 6),
+                    reflect=bool(body.get("reflect", True)),
+                    reflect_rounds=int(body.get("reflect_rounds") or 2),
+                    use_tools=bool(body.get("use_tools", True)),
+                )
+            except Exception as e:  # noqa: BLE001
+                return self._send(500, {"error": str(e)})
+            st = res.get("stats") or {}
+            rv = res.get("review") or {}
+            log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
+                st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
+                ("（%s 分）" % rv.get("final_score")) if rv.get("final_score") is not None else ""))
+            return self._send(200, res)
 
         return self._send(404, {"error": "unknown path " + path})
 
