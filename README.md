@@ -213,9 +213,17 @@ python tests/smoke_test.py
 node tests/ui_test.js
 ```
 
+**收藏页测试**（隐私与交互：描述与 tag 默认收起、改名、空状态）：
+
+```bat
+node tests/ui_favorites_test.js
+```
+
+它们用一套极简 DOM 桩把 `common.js` 和对应页面脚本装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
+
 它用一套极简 DOM 桩把 `common.js` + `app.js` 装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
 
-> 两个测试都会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
+> 冒烟测试会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
 > Python 会把 `127.0.0.1` 的请求也发给代理，导致整片误报 502。服务端访问 ComfyUI 时同样做了直连处理。
 
 ## 数据来源与致谢

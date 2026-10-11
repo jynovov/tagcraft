@@ -24,24 +24,56 @@ function render() {
     const q = f.quality || [], p = f.pos || [], n = f.neg || [];
     const all = [].concat(q, p);
     const text = String(f.text || '').replace(/\s+/g, ' ').trim();
+    const name0 = (f.title || '').trim() || (text.length > 12 ? text.slice(0, 12) + '…' : text) || '未命名';
+    const name = name0.length > 22 ? name0.slice(0, 22) + '…' : name0;
+    // 默认只露出名字与数量，描述和 tag 都收在下面，需要时再展开
     return `<div class="fcard">
       <div class="fhead">
-        <span class="ftitle">${escapeHtml(text.slice(0, 30)) || escapeHtml(f.title || '未命名')}</span>
-        <span class="fmeta">质量词 ${q.length} · 正向 ${p.length} · 负向 ${n.length}</span>
+        <span class="ftitle">${escapeHtml(name)}</span>
         <span class="spacer"></span>
         <span class="htime">${f.time || ''}</span>
       </div>
-      <div class="ftext">${escapeHtml(text.length > 320 ? text.slice(0, 320) + '…' : text) || '（没有填描述）'}</div>
-      <div class="ftags">${escapeHtml(all.join(', ')) || '（没有 tag）'}</div>
+      <div class="fmeta-row">
+        <span class="fmeta">质量词 ${q.length}</span>
+        <span class="fmeta">正向 ${p.length}</span>
+        <span class="fmeta">负向 ${n.length}</span>
+      </div>
+      <details class="fbox">
+        <summary>展开描述与 tag</summary>
+        <div class="fbody">
+          <div class="flabel">描述</div>
+          <div class="ftext">${escapeHtml(text) || '（没有填描述）'}</div>
+          <div class="flabel">质量词 + 正向 tag（${all.length}）</div>
+          <div class="ftags">${escapeHtml(all.join(', ')) || '（无）'}</div>
+          <div class="flabel">负向 tag（${n.length}）</div>
+          <div class="ftags">${escapeHtml(n.join(', ')) || '（无）'}</div>
+        </div>
+      </details>
       <div class="frow">
         <button class="small primary" data-load="${i}">载入生成页</button>
         <button class="small" data-copy="${i}">复制正向</button>
         <button class="small" data-copyneg="${i}">复制负向</button>
         <span class="spacer"></span>
+        <button class="small ghost" data-rename="${i}">改名</button>
         <button class="small ghost danger" data-del="${i}">删除</button>
       </div>
     </div>`;
   }).join('');
+
+  $('list').querySelectorAll('[data-rename]').forEach(b => {
+    b.addEventListener('click', () => {
+      const idx = +b.dataset.rename;
+      const list2 = loadFavs();
+      const item = list2[idx];
+      if (!item) return;
+      const name = prompt('给这条收藏起个名字（列表里只会显示这个名字）：', item.title || '');
+      if (name === null) return;
+      item.title = String(name).trim() || item.title;
+      saveFavs(list2);
+      render();
+      toast('已改名为「' + item.title + '」');
+    });
+  });
 
   $('list').querySelectorAll('[data-load]').forEach(b => {
     b.addEventListener('click', () => {

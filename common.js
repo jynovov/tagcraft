@@ -122,9 +122,11 @@ function delFav(id) {
 /** 用当前这套（描述 + tag）造一条收藏记录 */
 function makeFav(text, quality, pos, neg) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  // 只留一个很短的标签名；完整描述收在折叠区里（考虑隐私，列表页不直接暴露内容）
+  const label = clean.length > 12 ? clean.slice(0, 12) + '…' : clean;
   return {
     id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    title: clean.slice(0, 26) || '未命名',
+    title: label || '未命名',
     text: text || '',
     quality: quality || [], pos: pos || [], neg: neg || [],
     time: new Date().toLocaleString()
