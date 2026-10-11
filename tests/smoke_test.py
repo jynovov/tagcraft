@@ -33,6 +33,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 LOG = os.path.join(ROOT, "data", "tagcraft.log")
 
+# 只测本机，必须绕开系统/环境里配置的代理。
+# 否则像 Hiddify / Clash 这类客户端把系统代理打开后，Python 会把 127.0.0.1 的请求
+# 也发给代理，结果拿到 502 Bad Gateway，看起来像是服务坏了。
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 # 设置 TAGCRAFT_TEST_URL（例：http://127.0.0.1:8848）可以改为"只测一个已经在跑的实例"，
 # 这时不会自己起服务，也不会在结尾把它关掉。
 EXTERNAL = os.environ.get("TAGCRAFT_TEST_URL", "").rstrip("/")
@@ -63,7 +68,7 @@ def say(msg):
 
 def get(path):
     try:
-        r = urllib.request.urlopen(BASE + path, timeout=15)
+        r = OPENER.open(BASE + path, timeout=15)
         return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")[:200]
@@ -75,7 +80,7 @@ def post(path, body=None, timeout=20):
     req = urllib.request.Request(BASE + path, data=json.dumps(body or {}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        r = urllib.request.urlopen(req, timeout=timeout)
+        r = OPENER.open(req, timeout=timeout)
         return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")[:300]

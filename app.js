@@ -17,6 +17,58 @@ const state = {
 const arr = (kind) => kind === 'q' ? state.quality
   : kind === 'pos' ? state.positive : state.negative;
 
+/* ---------------------------------------------------------------- 草稿自动保存
+ * 生成页的整套结果（描述 + 三组 tag + 轨迹 + 评分）都写进 localStorage，
+ * 切到别的页面再回来能原样恢复；只有点「清空」才会真正丢掉。            */
+
+const LS_WORK = 'tagcraft.work';
+
+function saveWork() {
+  const has = $('inputText').value.trim() || state.quality.length ||
+              state.positive.length || state.negative.length || state.unknown.length;
+  if (!has) { clearWork(); return; }   // 空页面不留草稿（否则点「清空」会把它写回来）
+  try {
+    localStorage.setItem(LS_WORK, JSON.stringify({
+      text: $('inputText').value,
+      maxTags: $('maxTags').value,
+      agent: $('useAgent').checked,
+      weight: $('useWeight').checked,
+      quality: state.quality,
+      positive: state.positive,
+      negative: state.negative,
+      unknown: state.unknown,
+      notes: state.notes,
+      stats: state.stats,
+      trace: state.trace,
+      review: state.review,
+      ts: Date.now()
+    }));
+  } catch (e) { /* 存不下就算了，不影响使用 */ }
+}
+
+function restoreWork() {
+  let w = null;
+  try { w = JSON.parse(localStorage.getItem(LS_WORK) || 'null'); } catch (e) { w = null; }
+  if (!w) return false;
+  $('inputText').value = w.text || '';
+  if (w.maxTags) $('maxTags').value = w.maxTags;
+  $('useAgent').checked = w.agent !== false;
+  $('useWeight').checked = !!w.weight;
+  state.quality = w.quality || [];
+  state.positive = w.positive || [];
+  state.negative = w.negative || [];
+  state.unknown = w.unknown || [];
+  state.notes = w.notes || '';
+  state.stats = w.stats || null;
+  state.trace = w.trace || [];
+  state.review = w.review || null;
+  return true;
+}
+
+function clearWork() {
+  try { localStorage.removeItem(LS_WORK); } catch (e) { /* ignore */ }
+}
+
 /* ---------------------------------------------------------------- 渲染 */
 
 function chip(c, i, kind) {
@@ -60,6 +112,7 @@ function render() {
   renderOut();
   bindTags();
   bindUnknown();
+  saveWork();          // 每次状态变化都落盘，换页回来不丢
 }
 
 /* 折叠面板：收起时只显示步数 / 轮数 / 得分 */
@@ -531,19 +584,27 @@ function init() {
     state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
     state.notes = ''; state.stats = null; state.trace = []; state.review = null;
     $('searchResults').innerHTML = '';
+    clearWork();
     render();
+    toast('已清空');
   });
   $('btnSearch').addEventListener('click', doSearch);
   $('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('inputText').addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generate(); }
   });
+  // 只打字还没生成也要留住（防抖，避免每敲一个字都写一次）
+  let typeTimer = null;
+  $('inputText').addEventListener('input', () => {
+    clearTimeout(typeTimer);
+    typeTimer = setTimeout(saveWork, 400);
+  });
   $('btnFav').addEventListener('click', favCurrent);
   $('btnValidate').addEventListener('click', revalidate);
   $('btnQualityPreset').addEventListener('click', () => addByNames(QUALITY_PRESET, 'pos'));
   $('btnNegBase').addEventListener('click', () => addByNames(NEG_BASE, 'neg'));
   $('btnNegAnatomy').addEventListener('click', () => addByNames(NEG_ANATOMY, 'neg'));
-  $('useWeight').addEventListener('change', renderOut);
+  $('useWeight').addEventListener('change', () => { renderOut(); saveWork(); });
   $('btnCopyQuality').addEventListener('click', () => copy($('outQuality').value));
   $('btnCopyPos').addEventListener('click', () => copy($('outPos').value));
   $('btnCopyNeg').addEventListener('click', () => copy($('outNeg').value));
@@ -553,7 +614,7 @@ function init() {
   $('outPos').addEventListener('input', () => syncFromText('outPos', 'positive'));
   $('outNeg').addEventListener('input', () => syncFromText('outNeg', 'negative'));
 
-  // 从收藏页 / 历史页带过来的记录
+  // 从收藏页 / 历史页带过来的记录（优先于草稿）
   try {
     const p = localStorage.getItem(LS_PENDING);
     if (p) {
@@ -563,7 +624,12 @@ function init() {
     }
   } catch (e) { /* ignore */ }
 
+  // 恢复上次没做完的工作（描述 + 结果 + 轨迹）
+  const restored = restoreWork();
   render();
+  if (restored && (state.positive.length || state.negative.length || state.quality.length)) {
+    toast('已恢复上次的结果');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

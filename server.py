@@ -1054,13 +1054,27 @@ def self_refine(cfg, text, result, rounds=2, threshold=92):
 # ---------------------------------------------------------------- ComfyUI 对接
 
 
+def _opener_for(url):
+    """本机 / 内网地址不走代理。
+
+    Hiddify、Clash 这类客户端会把 Windows 系统代理打开，而 urllib 会读取这份设置，
+    于是连 http://127.0.0.1:8188 的请求也被塞给代理，结果明明 ComfyUI 开着却报 502。
+    """
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if (host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+            or host.startswith("127.") or host.startswith("192.168.")
+            or host.startswith("10.")):
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener()
+
+
 def _post_json(url, payload, timeout=30):
     """POST 一个 JSON，返回解析后的响应体。失败时抛出带友好说明的 RuntimeError。"""
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data,
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _opener_for(url).open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "replace")
         return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as e:
@@ -1092,7 +1106,7 @@ def comfy_ping(url=None):
 def _get_json(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "TagCraft/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _opener_for(url).open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         raise RuntimeError("HTTP %s：%s" % (e.code, e.read().decode("utf-8", "replace")[:200]))
