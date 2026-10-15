@@ -643,7 +643,7 @@ async function pollJob(jid, btn) {
       return;
     }
     const res = j.result || {};
-    const ms = Date.now() - startedAt;
+    const ms = Date.now() - (state.progress.startedAt || Date.now());
     state.progress.done = true;
     finishGenerate(res, ms);
     if (res.tools_used === false) {

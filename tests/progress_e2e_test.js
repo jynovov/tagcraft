@@ -80,6 +80,7 @@ function waitUp(port, ms = 25000) {
       closest: () => null
     });
     const el = id => els[id] || (els[id] = makeEl(id));
+    const created = [];                       // 记录所有动态创建的元素（用来抓 toast 报错）
     const realFetch = globalThis.fetch;
     const ctx = {
       console, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -97,7 +98,8 @@ function waitUp(port, ms = 25000) {
       },
       document: {
         getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-        createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
+        createElement: t => { const e = makeEl('_new_' + t); created.push(e); return e; },
+        addEventListener() {}, body: makeEl('body')
       },
       navigator: { clipboard: { writeText: () => Promise.resolve() } },
       location: { href: '/' }, prompt: () => 'x', confirm: () => true,
@@ -155,8 +157,18 @@ function waitUp(port, ms = 25000) {
           widths.every((w, i) => i === 0 || w >= widths[i - 1]), JSON.stringify(widths));
     check('跑完时到达 100%', widths.length > 0 && widths[widths.length - 1] === 100,
           JSON.stringify(widths.slice(-3)));
+    const applied = JSON.parse(vm.runInContext(
+      'JSON.stringify({pos:(state.positive||[]).length, neg:(state.negative||[]).length})', ctx));
+    check('跑完后结果真的填回了界面', applied.pos > 0 && applied.neg > 0,
+          JSON.stringify(applied));
+    const toasts = created.filter(e => String(e.className).indexOf('toast') >= 0)
+                          .map(e => String(e.textContent || ''));
+    check('运行过程中没有脚本报错弹出（例如 xxx is not defined）',
+          !toasts.some(t => /is not defined|undefined is not|is not a function/.test(t)),
+          JSON.stringify(toasts));
 
     console.log('== B. 切页期间任务跑完，回生成页能取回结果');
+    vm.runInContext('resetView()', ctx);      // 模拟"切走再回来"时的空页面
     const jr = await (await realFetch(BASE + '/api/agent', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: '测试切页', max_rounds: 3, reflect: false,
