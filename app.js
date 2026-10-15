@@ -628,7 +628,7 @@ async function pollJob(jid, btn) {
                        startedAt: startedAt, done: j.status !== 'running' };
     if (j.status === 'running') {
       render();
-      pollTimer = setTimeout(() => pollJob(jid, btn), 700);
+      pollTimer = setTimeout(() => pollJob(jid, btn), 400);
       return;
     }
     stopTick();
@@ -697,7 +697,7 @@ function startTick() {
   tickTimer = setInterval(() => {
     if (state.progress && !state.progress.done) renderProgress();
     else stopTick();
-  }, 1000);
+  }, 400);
 }
 
 function stopTick() {
@@ -716,7 +716,18 @@ function renderProgress() {
   }
   box.classList.add('show');
   const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
-  const pct = Math.max(0, Math.min(100, Math.round(p.pct || 0)));
+
+  // 目标值来自服务端（按阶段/轮数/每次工具调用估算），这里再平滑逼近，
+  // 这样 400ms 才轮询一次也不会一格一格地跳。
+  const target = p.done ? 100 : Math.max(0, Math.min(97, p.pct || 0));
+  if (typeof p.shown !== 'number') p.shown = target;   // 首次直接显示真实值，之后再平滑
+  if (p.shown < target) {
+    p.shown = Math.min(target, p.shown + Math.max(0.6, (target - p.shown) * 0.28));
+  } else if (p.shown > target) {
+    p.shown = target;
+  }
+  const pct = Math.round(p.done ? 100 : p.shown);
+
   let head;
   if (!p.done) {
     head = '<span class="spin"></span>智能体运行中… ' + pct + '% · 已用 ' + secs + ' 秒';

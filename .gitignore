@@ -27,3 +27,6 @@ desktop.ini
 
 # 测试/调试时产生的 stderr 日志
 *.err
+
+# 调试时产生的临时文件
+data/_*

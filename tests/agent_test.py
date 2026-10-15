@@ -188,7 +188,8 @@ def main():
             check("进度有多条步骤（能看出在干什么）", len(steps) >= 3,
                   "steps=%d → %s" % (len(steps), str(steps[:3])))
             check("进度里写明了调用哪个工具",
-                  any("调用工具" in s for s in steps), str(steps)[:160])
+                  any(("search_tags" in s) or ("validate_tags" in s) for s in steps),
+                  str(steps)[:200])
             check("进度带百分比（进度条用）", pct is not None and 0 < pct <= 100,
                   "pct=%s" % pct)
             check("完成时百分比是 100", pct == 100, "pct=%s" % pct)
@@ -197,6 +198,37 @@ def main():
             check("提交后台任务拿到 job_id", False, b[:200])
         st, b = get(base, "/api/agent/progress?id=nosuchjob")
         check("不存在的任务号报 404", st == 404, "HTTP %s" % st)
+
+        print("== 进度要够细（不能从 0 直接跳到 100）")
+        st, b = post(base, "/api/agent", {"text": text, "max_rounds": 6, "reflect": True,
+                                          "reflect_rounds": 2, "async": True,
+                                          "api": dict(api, model="slow-agent")})
+        if st == 200:
+            jid = json.loads(b).get("job_id")
+            seen, msgs = [], []
+            for _ in range(200):
+                st2, b2 = get(base, "/api/agent/progress?id=" + str(jid))
+                if st2 != 200:
+                    break
+                j = json.loads(b2)
+                p = j.get("pct")
+                if p is not None:
+                    seen.append(round(float(p)))
+                m = j.get("msg")
+                if m and (not msgs or msgs[-1] != m):
+                    msgs.append(m)
+                if j.get("status") != "running":
+                    break
+                time.sleep(0.12)
+            mid = sorted(set(p for p in seen if 10 <= p <= 90))
+            low = [p for p in mid if p < 60]
+            check("出现足够多的中间档位", len(mid) >= 5, "中间档位 %s" % mid)
+            check("前半程也有进度（不是一步到底）", len(low) >= 3, "50 以下档位 %s" % low)
+            check("状态文字逐条在更新（不是一句话到底）", len(set(msgs)) >= 6,
+                  "状态条数 %d" % len(set(msgs)))
+            check("最终到 100%", 100 in seen, "最大 %s" % (max(seen) if seen else None))
+        else:
+            check("出现足够多的中间档位", False, b[:200])
 
         print("== 只重跑自省：POST /api/reflect")
         st, b = post(base, "/api/reflect", {"text": text,

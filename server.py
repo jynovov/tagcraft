@@ -951,15 +951,41 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     trace, stats = [], {"llm_calls": 0, "tool_calls": 0}
     tools_ok = bool(use_tools)
     content, parsed = "", None
-    say("读到中文描述（%d 字），开始分析画面要素" % len(text), 6)
 
-    for rnd in range(1, max(1, int(max_rounds)) + 1):
+    # 进度模型：把整件事切成很多小格，避免进度条"要么不动、要么直接到底"
+    #   0~6%   准备
+    #   6~64%  生成阶段：每一轮里有"发请求 → 解析 → 逐个执行工具"若干小格
+    #   64~66% 结果整理与词表校验
+    #   66~94% 自省阶段：每一轮分"评分中 → 应用修改"
+    #   94~97% 收尾
+    #   100%   真正完成（由任务结束时置位）
+    max_r = max(1, int(max_rounds))
+    ref_r = max(1, int(reflect_rounds)) if reflect else 1
+    gen_lo, gen_hi = 6.0, 64.0
+    ref_lo, ref_hi = 66.0, 94.0
+    # 生成阶段按"模型请求次数"推进：实测常见节奏是 2 次查词 + 1 次收尾，
+    # 所以拿 3 次当分母，每次请求内部再分"发出→返回→逐个工具"三小格。
+    expect_calls = max(2.0, min(float(max_r), 3.0))
+    call_no = [0]          # 已经发出的模型请求次数
+
+    def gen_pct(sub=0.0):
+        frac = min(1.0, (call_no[0] - 1 + max(0.0, min(1.0, sub))) / expect_calls)
+        return gen_lo + (gen_hi - gen_lo) * frac
+
+    def ref_pct(i, sub=0.0):
+        band = (ref_hi - ref_lo) / ref_r
+        return ref_lo + (i - 1) * band + band * max(0.0, min(1.0, sub))
+
+    say("读到中文描述（%d 字），开始分析画面要素" % len(text), 4)
+
+    for rnd in range(1, max_r + 1):
         payload = {"model": model, "messages": messages,
                    "temperature": float(temperature), "stream": False}
         if tools_ok:
             payload["tools"] = AGENT_TOOLS
             payload["tool_choice"] = "auto"
-        say("第 %d 轮：模型思考中…" % rnd, 6 + (rnd - 1) * 54.0 / max(1, int(max_rounds)))
+        call_no[0] += 1
+        say("第 %d/%d 轮：正在请求模型…" % (rnd, max_r), gen_pct(0.05))
         try:
             body = _post_chat(cfg, payload)
         except RuntimeError as e:
@@ -978,6 +1004,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             raise RuntimeError("接口返回格式异常：%s" % json.dumps(body, ensure_ascii=False)[:300])
 
         calls = msg.get("tool_calls") or []
+        say(("模型返回了 %d 个工具调用，正在执行…" % len(calls)) if calls
+            else "模型已返回，正在解析结果…", gen_pct(0.5))
         if not calls:
             content = msg.get("content") or ""
             parsed = _extract_json(content)
@@ -986,21 +1014,21 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                               "summary": "模型给出最终 tag"})
                 pos_n = len(parsed.get("positive") or [])
                 say("模型给出最终结果：正向 %d 个、负向 %d 个"
-                    % (pos_n, len(parsed.get("negative") or [])), 62)
+                    % (pos_n, len(parsed.get("negative") or [])), 63)
                 break
             # 既没有工具调用也没有 JSON：把这段当回答，让模型继续
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user",
                              "content": "请按约定格式输出最终 JSON（positive / negative / notes）。"})
-            say("模型没按格式返回，正在要求它重新输出")
-            if rnd == int(max_rounds):
+            say("模型没按格式返回，正在要求它重新输出", gen_pct(0.9))
+            if rnd == max_r:
                 break
             continue
 
         # 记录了工具调用：先回填 assistant 消息，再逐个执行
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": calls})
-        for c in calls:
+        for k, c in enumerate(calls):
             fn = (c.get("function") or {})
             fname = str(fn.get("name") or "")
             try:
@@ -1012,12 +1040,14 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
             messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
                              "content": out})
-            say("调用工具 %s：%s" % (fname, brief),
-                6 + rnd * 54.0 / max(1, int(max_rounds)))
+            # 一轮里可能有好几个工具调用，逐个推进百分比
+            say("执行工具 %d/%d（%s）：%s" % (k + 1, len(calls), fname, brief),
+                gen_pct(0.5 + 0.45 * (k + 1) / max(1, len(calls))))
 
     # 轮数用完了还没拿到 JSON：强制它收尾
     if not parsed:
-        say("轮数用尽，要求模型直接输出最终结果")
+        call_no[0] += 1
+        say("轮数用尽，要求模型直接输出最终结果", gen_pct(0.2))
         messages.append({"role": "user",
                          "content": "已经查得足够多了，现在直接输出最终 JSON，不要再调用工具。"})
         body = _post_chat(cfg, {"model": model, "messages": messages,
@@ -1035,10 +1065,13 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                 "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
 
     pos, neg = _pick_tag_lists(parsed)
+    say("按 33 万条词表逐条校验 %d 个 tag…" % (len(pos) + len(neg)), 64.8)
     valid, unknown = validate_tags(pos)
     valid_neg, unknown_neg = validate_tags(neg)
     stats["checked"] = len(pos) + len(neg)
     stats["unknown"] = len(unknown) + len(unknown_neg)
+    say("校验完成：%d 个有效、%d 个不在词表" % (len(valid) + len(valid_neg),
+                                            len(unknown) + len(unknown_neg)), 65.6)
     out = {
         "parsed": parsed, "raw": content,
         "positive": valid, "positive_unknown": unknown,
@@ -1087,8 +1120,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
     best = {"score": -1, "positive": None, "negative": None}
 
     for i in range(1, max(1, int(rounds)) + 1):
-        say("自省第 %d 轮：审核员评分中…" % i,
-            66 + (i - 1) * 26.0 / max(1, int(rounds)))
+        say("自省第 %d/%d 轮：审核员评分中…" % (i, max(1, int(rounds))),
+            66.0 + (i - 1) * 28.0 / max(1, int(rounds)))
         pos = [h["tag"] for h in result["positive"]] + [u["tag"] for u in result["positive_unknown"]]
         neg = [h["tag"] for h in result["negative"]] + [u["tag"] for u in result["negative_unknown"]]
         bad = [u["tag"] for u in result["positive_unknown"]] + \
@@ -1136,13 +1169,13 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
                         "changed": changed})
         if score is not None and score > best["score"]:
             best = {"score": score, "positive": result["positive"], "negative": result["negative"]}
-        say("自省第 %d 轮：%s 分，改动 %d 个 tag"
-            % (i, score if score is not None else "—", changed),
-            66 + i * 26.0 / max(1, int(rounds)))
+        say("自省第 %d/%d 轮：%s 分，改动 %d 个 tag"
+            % (i, max(1, int(rounds)), score if score is not None else "—", changed),
+            66.0 + i * 28.0 / max(1, int(rounds)))
         # 收敛条件：分数够高、或这一轮没改动
         if (score is not None and score >= threshold) or changed == 0:
             if score is not None and score >= threshold:
-                say("分数达到 %d，自省收敛" % threshold, 96)
+                say("分数达到 %d，自省收敛" % threshold, 95)
             break
 
     return {"rounds": history,

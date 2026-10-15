@@ -16,6 +16,7 @@
 
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DUMP = os.environ.get("MOCK_LLM_DUMP", "mock_llm_calls.json")
@@ -74,6 +75,11 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "Service is too busy. We advise users to temporarily switch "
                                "to alternative LLM API service providers.",
                     "type": "service_unavailable_error"}}, 503)
+
+        # 慢速模式：模型名里带 slow 时，每个请求多等一会儿。
+        # 用来验证"进度条是不是真的在细粒度推进"（太快的话看不出中间状态）。
+        if "slow" in model:
+            time.sleep(0.5)
 
         # ---- 自省（审核）阶段 ----
         if _is_critic(msgs):
