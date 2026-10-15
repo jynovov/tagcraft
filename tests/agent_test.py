@@ -171,7 +171,7 @@ def main():
         if st == 200:
             jid = json.loads(b).get("job_id")
             check("提交后台任务拿到 job_id", bool(jid), b[:120])
-            steps, status, result = [], "running", None
+            steps, status, result, pct = [], "running", None, None
             for _ in range(60):
                 st2, b2 = get(base, "/api/agent/progress?id=" + str(jid))
                 if st2 != 200:
@@ -180,6 +180,7 @@ def main():
                 steps = j.get("steps") or []
                 status = j.get("status")
                 result = j.get("result")
+                pct = j.get("pct")
                 if status != "running":
                     break
                 time.sleep(0.4)
@@ -188,6 +189,9 @@ def main():
                   "steps=%d → %s" % (len(steps), str(steps[:3])))
             check("进度里写明了调用哪个工具",
                   any("调用工具" in s for s in steps), str(steps)[:160])
+            check("进度带百分比（进度条用）", pct is not None and 0 < pct <= 100,
+                  "pct=%s" % pct)
+            check("完成时百分比是 100", pct == 100, "pct=%s" % pct)
             check("任务结果里有 tag", bool((result or {}).get("positive")))
         else:
             check("提交后台任务拿到 job_id", False, b[:200])

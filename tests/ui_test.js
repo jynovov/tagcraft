@@ -182,6 +182,27 @@ chk('超出的旧记录没被保留', loadHistory().every(h => h.text !== '记�
 saveHistory([]);
 chk('清空历史可用', loadHistory().length === 0);
 
+/* ---------- 12. 智能体进度条渲染 ---------- */
+state.progress = { pct: 42, msg: '第 2 轮：模型思考中…',
+                   startedAt: Date.now() - 14000, status: 'running', done: false };
+renderProgress();
+const ph = document.getElementById('progress').innerHTML;
+chk('进度条按百分比渲染', ph.indexOf('width:42%') >= 0, ph.slice(0, 100));
+chk('进度条显示百分比数字', ph.indexOf('42%') >= 0);
+chk('进度条显示当前状态', ph.indexOf('模型思考中') >= 0);
+chk('进度条显示已用时间', ph.indexOf('已用') >= 0);
+
+state.progress = { pct: 100, msg: '完成', startedAt: Date.now() - 30000,
+                   status: 'done', done: true };
+renderProgress();
+const ph2 = document.getElementById('progress').innerHTML;
+chk('完成后满格并变绿', ph2.indexOf('width:100%') >= 0 && ph2.indexOf('pbar done') >= 0,
+    ph2.slice(0, 100));
+
+state.progress = null;
+renderProgress();
+chk('清掉进度后收起', document.getElementById('progress').innerHTML === '');
+
 return R;
 })();`;
 

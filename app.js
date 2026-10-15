@@ -573,8 +573,8 @@ async function generate() {
       });
       if (!r.job_id) throw new Error('服务没有返回任务号');
       sessionStorage.setItem(LS_JOB, r.job_id);
-      state.progress = { steps: ['任务已提交，等待模型响应'], startedAt: Date.now(),
-                         status: 'running', done: false };
+      state.progress = { pct: 2, msg: '任务已提交，等待模型响应',
+                         startedAt: Date.now(), status: 'running', done: false };
       state.trace = [];
       state.review = null;
       render();
@@ -624,7 +624,7 @@ async function pollJob(jid, btn) {
   try {
     const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
     const startedAt = (state.progress && state.progress.startedAt) || Date.now();
-    state.progress = { steps: j.steps || [], status: j.status,
+    state.progress = { pct: j.pct || 0, msg: j.msg || '', status: j.status,
                        startedAt: startedAt, done: j.status !== 'running' };
     if (j.status === 'running') {
       render();
@@ -638,6 +638,7 @@ async function pollJob(jid, btn) {
       toast(j.error || '智能体运行失败', true);
       state.notes = j.error || '';
       render();
+      setTimeout(hideProgressLater, 6000);
       return;
     }
     const res = j.result || {};
@@ -652,10 +653,19 @@ async function pollJob(jid, btn) {
     }
     render();
     pushHistory(state.lastText || $('inputText').value);
+    setTimeout(hideProgressLater, 4000);
   } catch (e) {
     stopTick();
     if (btn) { btn.disabled = false; btn.textContent = '生成 tag'; }
     toast(e.message, true);
+  }
+}
+
+/** 跑完之后让进度条再停留一会儿，然后收起来 */
+function hideProgressLater() {
+  if (state.progress && state.progress.done) {
+    state.progress = null;
+    renderProgress();
   }
 }
 
@@ -666,7 +676,7 @@ async function resumeJob() {
   try {
     const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
     if (j.status !== 'running') { sessionStorage.removeItem(LS_JOB); return false; }
-    state.progress = { steps: j.steps || [], status: 'running',
+    state.progress = { pct: j.pct || 0, msg: j.msg || '', status: 'running',
                        startedAt: Date.now(), done: false };
     const btn = $('btnGenerate');
     btn.disabled = true;
@@ -695,7 +705,7 @@ function stopTick() {
   tickTimer = null;
 }
 
-/** 只重画进度块（每秒刷新用时，不动其他内容） */
+/** 只重画进度块（进度条 + 当前状态，每秒刷新用时） */
 function renderProgress() {
   const box = $('progress');
   const p = state.progress;
@@ -706,21 +716,20 @@ function renderProgress() {
   }
   box.classList.add('show');
   const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
+  const pct = Math.max(0, Math.min(100, Math.round(p.pct || 0)));
   let head;
   if (!p.done) {
-    head = '<span class="spin"></span>智能体运行中… ' + secs +
-      ' 秒　<span style="font-weight:400;color:#a08a76">可以切到别的页面，回来还接得上</span>';
+    head = '<span class="spin"></span>智能体运行中… ' + pct + '% · 已用 ' + secs + ' 秒';
   } else if (p.status === 'error') {
-    head = '智能体运行失败（用时 ' + secs + ' 秒）';
+    head = '运行失败 · 用时 ' + secs + ' 秒';
   } else {
-    head = '智能体运行完成 · 共 ' + secs + ' 秒';
+    head = '完成 · 用时 ' + secs + ' 秒';
   }
-  const steps = p.steps || [];
-  box.innerHTML = '<div class="progress-head">' + head + '</div>' +
-    steps.map((s, i) => {
-      const now = (!p.done && i === steps.length - 1) ? ' now' : '';
-      return '<div class="pstep' + now + '">' + escHtml(s) + '</div>';
-    }).join('');
+  box.innerHTML =
+    '<div class="progress-head">' + head + '</div>' +
+    '<div class="pbar' + (p.done ? ' done' : '') + '">' +
+    '<div class="pbar-fill" style="width:' + (p.done ? 100 : pct) + '%"></div></div>' +
+    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>';
 }
 
 function pushHistory(text) {
