@@ -11,7 +11,9 @@ const state = {
   notes: '',
   stats: null,    // {model, checked, unknown, ms, tool_calls}
   trace: [],      // Agent 工具调用轨迹
-  review: null    // 自省评审记录
+  review: null,   // 自省评审记录
+  progress: null, // 智能体运行进度 {steps, startedAt, status, done}
+  lastText: ''    // 本次生成用的描述（写历史用）
 };
 
 const arr = (kind) => kind === 'q' ? state.quality
@@ -131,6 +133,7 @@ function resetView() {
   $('inputText').value = '';
   state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
   state.notes = ''; state.stats = null; state.trace = []; state.review = null;
+  state.progress = null;
   $('searchResults').innerHTML = '';
 }
 
@@ -243,6 +246,7 @@ function render() {
 
   renderTrace();
   renderReview();
+  renderProgress();
   renderOut();
   bindTags();
   bindUnknown();
@@ -518,29 +522,80 @@ function tidy() {
 
 /* ---------------------------------------------------------------- 生成 */
 
+const LS_JOB = 'tagcraft.job';    // 正在跑的智能体任务号（放在 sessionStorage，切页回来还能接上）
+let pollTimer = null;
+let tickTimer = null;
+
+/** 把一次生成的结果填进界面并收尾 */
+function finishGenerate(r, ms) {
+  state.trace = r.trace || [];
+  state.review = r.review || null;
+  applyResult(r);
+  state.notes = r.notes || '';
+  const box = r.stats || {};
+  state.stats = {
+    model: box.llm_calls || 1,
+    tool_calls: box.tool_calls || 0,
+    checked: box.checked != null ? box.checked
+      : (r.positive || []).length + (r.negative || []).length +
+        (r.positive_unknown || []).length + (r.negative_unknown || []).length,
+    unknown: box.unknown != null ? box.unknown
+      : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
+    ms: ms
+  };
+}
+
 async function generate() {
   const text = $('inputText').value.trim();
   if (!text) { toast('先写点描述', true); return; }
   const agent = $('useAgent').checked;
   const btn = $('btnGenerate');
+  const st = loadSettings();
+  const body = {
+    text,
+    max_tags: +$('maxTags').value || 40,
+    temperature: st.temperature ? +st.temperature : 0.6,
+    max_rounds: st.agentRounds ? +st.agentRounds : 6,
+    reflect: st.reflect !== false,
+    reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
+    api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+  };
+  state.lastText = text;
   btn.disabled = true;
   btn.textContent = agent ? '智能体运行中…' : '生成中…';
-  toast(agent ? '智能体运行中：会自己查词表并自省…' : '正在生成…');
-  const st = loadSettings();
+
+  // 智能体模式：丢到后台任务跑，前端轮询进度（这样每一步都看得见，也不怕请求超时）
+  if (agent) {
+    try {
+      const r = await api('/api/agent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({}, body, { async: true }))
+      });
+      if (!r.job_id) throw new Error('服务没有返回任务号');
+      sessionStorage.setItem(LS_JOB, r.job_id);
+      state.progress = { steps: ['任务已提交，等待模型响应'], startedAt: Date.now(),
+                         status: 'running', done: false };
+      state.trace = [];
+      state.review = null;
+      render();
+      startTick();
+      pollJob(r.job_id, btn);
+      return;
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+      btn.textContent = '生成 tag';
+      return;
+    }
+  }
+
+  // 单次模式：一次请求拿到结果
   const t0 = Date.now();
+  toast('正在生成…');
   try {
-    const r = await api(agent ? '/api/agent' : '/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        max_tags: +$('maxTags').value || 40,
-        temperature: st.temperature ? +st.temperature : 0.6,
-        max_rounds: st.agentRounds ? +st.agentRounds : 6,
-        reflect: st.reflect !== false,
-        reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
-        api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
-      })
+    const r = await api('/api/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
     if (r.error && !r.parsed) {
       toast(r.error, true);
@@ -550,27 +605,9 @@ async function generate() {
       render();
       return;
     }
-    state.trace = r.trace || [];
-    state.review = r.review || null;
-    applyResult(r);
-    state.notes = r.notes || '';
-    const box = r.stats || {};
-    state.stats = {
-      model: box.llm_calls || 1,
-      tool_calls: box.tool_calls || 0,
-      checked: box.checked != null ? box.checked
-        : (r.positive || []).length + (r.negative || []).length +
-          (r.positive_unknown || []).length + (r.negative_unknown || []).length,
-      unknown: box.unknown != null ? box.unknown
-        : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
-      ms: Date.now() - t0
-    };
-    if (agent && r.tools_used === false) {
-      toast('该接口不支持工具调用，已降级为单次生成', true);
-    } else {
-      toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
-            ' · 负向 ' + state.negative.length);
-    }
+    finishGenerate(r, Date.now() - t0);
+    toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
+          ' · 负向 ' + state.negative.length);
     render();
     pushHistory(text);
   } catch (e) {
@@ -579,6 +616,111 @@ async function generate() {
     btn.disabled = false;
     btn.textContent = '生成 tag';
   }
+}
+
+/** 轮询后台任务进度 */
+async function pollJob(jid, btn) {
+  clearTimeout(pollTimer);
+  try {
+    const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
+    const startedAt = (state.progress && state.progress.startedAt) || Date.now();
+    state.progress = { steps: j.steps || [], status: j.status,
+                       startedAt: startedAt, done: j.status !== 'running' };
+    if (j.status === 'running') {
+      render();
+      pollTimer = setTimeout(() => pollJob(jid, btn), 700);
+      return;
+    }
+    stopTick();
+    sessionStorage.removeItem(LS_JOB);
+    if (btn) { btn.disabled = false; btn.textContent = '生成 tag'; }
+    if (j.status === 'error') {
+      toast(j.error || '智能体运行失败', true);
+      state.notes = j.error || '';
+      render();
+      return;
+    }
+    const res = j.result || {};
+    const ms = Date.now() - startedAt;
+    state.progress.done = true;
+    finishGenerate(res, ms);
+    if (res.tools_used === false) {
+      toast('该接口不支持工具调用，已降级为单次生成', true);
+    } else {
+      toast('完成：正向 ' + state.positive.length + ' · 负向 ' + state.negative.length +
+            ' · 用时 ' + (ms / 1000).toFixed(1) + ' 秒');
+    }
+    render();
+    pushHistory(state.lastText || $('inputText').value);
+  } catch (e) {
+    stopTick();
+    if (btn) { btn.disabled = false; btn.textContent = '生成 tag'; }
+    toast(e.message, true);
+  }
+}
+
+/** 页面重新打开时，如果上一次的任务还在跑，接着显示进度 */
+async function resumeJob() {
+  const jid = sessionStorage.getItem(LS_JOB);
+  if (!jid) return false;
+  try {
+    const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
+    if (j.status !== 'running') { sessionStorage.removeItem(LS_JOB); return false; }
+    state.progress = { steps: j.steps || [], status: 'running',
+                       startedAt: Date.now(), done: false };
+    const btn = $('btnGenerate');
+    btn.disabled = true;
+    btn.textContent = '智能体运行中…';
+    render();
+    startTick();
+    pollJob(jid, btn);
+    toast('上一轮智能体任务还在跑，已接上进度');
+    return true;
+  } catch (e) {
+    sessionStorage.removeItem(LS_JOB);
+    return false;
+  }
+}
+
+function startTick() {
+  stopTick();
+  tickTimer = setInterval(() => {
+    if (state.progress && !state.progress.done) renderProgress();
+    else stopTick();
+  }, 1000);
+}
+
+function stopTick() {
+  clearInterval(tickTimer);
+  tickTimer = null;
+}
+
+/** 只重画进度块（每秒刷新用时，不动其他内容） */
+function renderProgress() {
+  const box = $('progress');
+  const p = state.progress;
+  if (!p) {
+    box.classList.remove('show');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.add('show');
+  const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
+  let head;
+  if (!p.done) {
+    head = '<span class="spin"></span>智能体运行中… ' + secs +
+      ' 秒　<span style="font-weight:400;color:#a08a76">可以切到别的页面，回来还接得上</span>';
+  } else if (p.status === 'error') {
+    head = '智能体运行失败（用时 ' + secs + ' 秒）';
+  } else {
+    head = '智能体运行完成 · 共 ' + secs + ' 秒';
+  }
+  const steps = p.steps || [];
+  box.innerHTML = '<div class="progress-head">' + head + '</div>' +
+    steps.map((s, i) => {
+      const now = (!p.done && i === steps.length - 1) ? ' now' : '';
+      return '<div class="pstep' + now + '">' + escHtml(s) + '</div>';
+    }).join('');
 }
 
 function pushHistory(text) {
@@ -749,6 +891,7 @@ function loadRecord(item) {
   state.trace = [];
   state.review = null;
   state.notes = '';
+  state.progress = null;
   render();
   revalidate();
 }
@@ -819,6 +962,9 @@ function init() {
   if (restored) {
     toast('已恢复「' + (curDraft().name || '未命名') + '」');
   }
+
+  // 如果上一次的智能体任务还在跑，接上进度
+  resumeJob();
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -921,8 +921,19 @@ def _pick_tag_lists(parsed):
 
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
-                   max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True):
-    """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。"""
+                   max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
+                   progress=None):
+    """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
+
+    progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
+    """
+    def say(msg):
+        if progress:
+            try:
+                progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
     model = (cfg.get("model") or "").strip()
     system = SYSTEM_PROMPT + AGENT_EXTRA
     if extra_rules:
@@ -935,6 +946,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     trace, stats = [], {"llm_calls": 0, "tool_calls": 0}
     tools_ok = bool(use_tools)
     content, parsed = "", None
+    say("读到中文描述（%d 字），开始分析画面要素" % len(text))
 
     for rnd in range(1, max(1, int(max_rounds)) + 1):
         payload = {"model": model, "messages": messages,
@@ -942,6 +954,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         if tools_ok:
             payload["tools"] = AGENT_TOOLS
             payload["tool_choice"] = "auto"
+        say("第 %d 轮：模型思考中…" % rnd)
         try:
             body = _post_chat(cfg, payload)
         except RuntimeError as e:
@@ -950,6 +963,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                 tools_ok = False
                 trace.append({"round": rnd, "tool": "降级", "args": {},
                               "summary": "该接口不支持工具调用，已退回单次生成"})
+                say("该接口不支持工具调用，自动降级为单次生成")
                 continue
             raise
         stats["llm_calls"] += 1
@@ -965,11 +979,15 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             if parsed:
                 trace.append({"round": rnd, "tool": "输出结果", "args": {},
                               "summary": "模型给出最终 tag"})
+                pos_n = len(parsed.get("positive") or [])
+                say("模型给出最终结果：正向 %d 个、负向 %d 个"
+                    % (pos_n, len(parsed.get("negative") or [])))
                 break
             # 既没有工具调用也没有 JSON：把这段当回答，让模型继续
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user",
                              "content": "请按约定格式输出最终 JSON（positive / negative / notes）。"})
+            say("模型没按格式返回，正在要求它重新输出")
             if rnd == int(max_rounds):
                 break
             continue
@@ -989,9 +1007,11 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
             messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
                              "content": out})
+            say("调用工具 %s：%s" % (fname, brief))
 
     # 轮数用完了还没拿到 JSON：强制它收尾
     if not parsed:
+        say("轮数用尽，要求模型直接输出最终结果")
         messages.append({"role": "user",
                          "content": "已经查得足够多了，现在直接输出最终 JSON，不要再调用工具。"})
         body = _post_chat(cfg, {"model": model, "messages": messages,
@@ -1022,8 +1042,10 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         "review": None,
     }
     if reflect:
+        say("进入自省环节：让审核员给这套 tag 打分")
         try:
-            out["review"] = self_refine(cfg, text, out, rounds=reflect_rounds)
+            out["review"] = self_refine(cfg, text, out, rounds=reflect_rounds,
+                                        progress=say)
             # 自省后重新校验一遍
             pos2 = [h["tag"] for h in out["positive"]]
             neg2 = [h["tag"] for h in out["negative"]]
@@ -1035,16 +1057,26 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             out["stats"]["unknown"] = len(unknown2) + len(unknown_neg2)
         except Exception as e:  # noqa: BLE001
             out["review"] = {"error": str(e), "rounds": []}
+            say("自省没跑完：%s" % e)
+    say("完成：正向 %d 个、负向 %d 个" % (len(out["positive"]), len(out["negative"])))
     return out
 
 
-def self_refine(cfg, text, result, rounds=2, threshold=92):
+def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
     """B：把结果 + 词表校验报告交给模型自评，按需重写。"""
+    def say(msg):
+        if progress:
+            try:
+                progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
     model = (cfg.get("model") or "").strip()
     history = []
     best = {"score": -1, "positive": None, "negative": None}
 
     for i in range(1, max(1, int(rounds)) + 1):
+        say("自省第 %d 轮：审核员评分中…" % i)
         pos = [h["tag"] for h in result["positive"]] + [u["tag"] for u in result["positive_unknown"]]
         neg = [h["tag"] for h in result["negative"]] + [u["tag"] for u in result["negative_unknown"]]
         bad = [u["tag"] for u in result["positive_unknown"]] + \
@@ -1092,13 +1124,60 @@ def self_refine(cfg, text, result, rounds=2, threshold=92):
                         "changed": changed})
         if score is not None and score > best["score"]:
             best = {"score": score, "positive": result["positive"], "negative": result["negative"]}
+        say("自省第 %d 轮：%s 分，改动 %d 个 tag"
+            % (i, score if score is not None else "—", changed))
         # 收敛条件：分数够高、或这一轮没改动
         if (score is not None and score >= threshold) or changed == 0:
+            if score is not None and score >= threshold:
+                say("分数达到 %d，自省收敛" % threshold)
             break
 
     return {"rounds": history,
             "final_score": history[-1]["score"] if history else None,
             "iterations": len(history)}
+
+
+# ---------------------------------------------------------------- 后台任务（让进度看得见）
+
+JOBS = {}                 # job_id -> {status, steps, result, error, started, updated}
+JOBS_LOCK = threading.Lock()
+JOB_KEEP = 20             # 只保留最近这么多个任务，避免越攒越多
+
+
+def job_new():
+    jid = os.urandom(6).hex()
+    with JOBS_LOCK:
+        JOBS[jid] = {"status": "running", "steps": [], "result": None,
+                     "error": None, "started": time.time(), "updated": time.time()}
+        if len(JOBS) > JOB_KEEP:
+            for k in sorted(JOBS, key=lambda x: JOBS[x]["started"])[:-JOB_KEEP]:
+                JOBS.pop(k, None)
+    return jid
+
+
+def job_step(jid, msg):
+    """给任务追加一行进度。"""
+    with JOBS_LOCK:
+        j = JOBS.get(jid)
+        if j is not None:
+            j["steps"].append(msg)
+            j["updated"] = time.time()
+
+
+def job_finish(jid, result=None, error=None):
+    with JOBS_LOCK:
+        j = JOBS.get(jid)
+        if j is not None:
+            j["result"] = result
+            j["error"] = error
+            j["status"] = "error" if error else "done"
+            j["updated"] = time.time()
+
+
+def job_get(jid):
+    with JOBS_LOCK:
+        j = JOBS.get(jid)
+        return json.loads(json.dumps(j)) if j else None   # 拷贝一份，避免并发读到半截
 
 
 # ---------------------------------------------------------------- ComfyUI 对接
@@ -1394,6 +1473,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/dict/suggest":
             return self._send(200, {"results": suggest_for(query.get("tag", ""), 8)})
 
+        if path == "/api/agent/progress":
+            j = job_get(query.get("id") or "")
+            if not j:
+                return self._send(404, {"error": "任务不存在或已过期"})
+            return self._send(200, j)
+
         if path == "/api/comfy/ping":
             try:
                 return self._send(200, comfy_ping(query.get("url")))
@@ -1544,24 +1629,48 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "还没有填 API Key。请在「设置」页填写，"
                              "或复制 config.example.json 为 config.json 后填入。"
                 })
+            kwargs = dict(
+                extra_rules=(body.get("extra_rules") or ""),
+                max_tags=int(body.get("max_tags") or 45),
+                temperature=float(body.get("temperature") or 0.6),
+                max_rounds=int(body.get("max_rounds") or 6),
+                reflect=bool(body.get("reflect", True)),
+                reflect_rounds=int(body.get("reflect_rounds") or 2),
+                use_tools=bool(body.get("use_tools", True)),
+            )
+
+            def report(res):
+                st = res.get("stats") or {}
+                rv = res.get("review") or {}
+                log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
+                    st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
+                    ("（%s 分）" % rv.get("final_score"))
+                    if rv.get("final_score") is not None else ""))
+
+            # async=true：立刻返回任务号，进度和结果都从 /api/agent/progress 拿。
+            # 这样界面能看到每一步在干什么，也不会因为一次请求太久而超时。
+            if body.get("async"):
+                jid = job_new()
+                job_step(jid, "任务已创建，正在准备提示词")
+
+                def _work():
+                    try:
+                        res = agent_generate(cfg, text,
+                                             progress=lambda m: job_step(jid, m), **kwargs)
+                        job_finish(jid, result=res)
+                        report(res)
+                    except Exception as e:  # noqa: BLE001
+                        job_finish(jid, error=str(e))
+                        log("智能体任务失败：%s" % e)
+
+                threading.Thread(target=_work, daemon=True).start()
+                return self._send(200, {"job_id": jid})
+
             try:
-                res = agent_generate(
-                    cfg, text,
-                    extra_rules=(body.get("extra_rules") or ""),
-                    max_tags=int(body.get("max_tags") or 45),
-                    temperature=float(body.get("temperature") or 0.6),
-                    max_rounds=int(body.get("max_rounds") or 6),
-                    reflect=bool(body.get("reflect", True)),
-                    reflect_rounds=int(body.get("reflect_rounds") or 2),
-                    use_tools=bool(body.get("use_tools", True)),
-                )
+                res = agent_generate(cfg, text, **kwargs)
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
-            st = res.get("stats") or {}
-            rv = res.get("review") or {}
-            log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
-                st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
-                ("（%s 分）" % rv.get("final_score")) if rv.get("final_score") is not None else ""))
+            report(res)
             return self._send(200, res)
 
         return self._send(404, {"error": "unknown path " + path})

@@ -1,7 +1,27 @@
-/* 设置页：大模型 / 智能体 / 系统提示词 / 词表 */
+/* 设置页：大模型 / 智能体 / 系统提示词 / 词表
+ * 这里的改动一律「即改即存」，不需要点保存按钮（按钮保留为明确动作）。 */
 
 const $ = (id) => document.getElementById(id);
 let defaultPrompt = '';
+let saveTimer = null;
+
+/** 把当前表单写进本地存储（同时保留其它页写入的设置，例如生成页的 tag 上限） */
+function persist() {
+  const old = loadSettings();
+  saveSettings(Object.assign({}, old, collect()));
+  localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+  const hint = $('saveHint');
+  if (hint) {
+    hint.textContent = '已自动保存 · ' + new Date().toLocaleTimeString();
+    hint.style.color = 'var(--accent2)';
+  }
+}
+
+/** 防抖：连续输入时只在停顿后写一次 */
+function queueSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(persist, 400);
+}
 
 async function loadStatus() {
   const st = await api('/api/status');
@@ -49,15 +69,21 @@ function init() {
   fill();
   loadStatus().catch(e => toast(e.message, true));
 
+  // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）
+  ['apiBase', 'model', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',
+   'reflect', 'systemPrompt'].forEach(id => {
+    const el = $(id);
+    el.addEventListener('input', queueSave);
+    el.addEventListener('change', queueSave);
+  });
+
   $('btnSave').addEventListener('click', () => {
-    // 保留其它页写入的设置（例如生成页的上限）
-    const old = loadSettings();
-    saveSettings(Object.assign({}, old, collect()));
+    persist();
     toast('已保存');
   });
 
   $('btnSavePrompt').addEventListener('click', () => {
-    localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+    persist();
     toast('提示词已保存');
   });
 

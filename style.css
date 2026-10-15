@@ -217,6 +217,29 @@ button.wide{flex:1;min-width:120px;padding:11px 18px;font-size:13.5px}
 .step.warn{color:var(--bad)}
 .step.warn .tool{color:var(--bad)}
 
+/* ---------------- 智能体实时进度 ---------------- */
+.progress{
+  display:none;margin-bottom:12px;border:1px solid #f0dcc0;border-radius:12px;
+  background:#fffbf3;padding:10px 13px
+}
+.progress.show{display:block}
+.progress-head{
+  font-size:12.5px;font-weight:600;color:#a3761f;margin-bottom:6px;
+  display:flex;align-items:center;gap:7px
+}
+.pstep{font-size:12.5px;color:#7d6753;padding:3px 0 3px 18px;position:relative}
+.pstep::before{
+  content:'';position:absolute;left:4px;top:11px;width:6px;height:6px;border-radius:50%;
+  background:#e0cdb2
+}
+.pstep.now{color:var(--accent2);font-weight:600}
+.pstep.now::before{background:var(--accent);box-shadow:0 0 0 3px rgba(226,128,63,.18)}
+.spin{
+  width:12px;height:12px;border-radius:50%;border:2px solid #f0dcc0;
+  border-top-color:var(--accent);display:inline-block;animation:spin .8s linear infinite
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 /* ---------------- 统计 / 说明 ---------------- */
 .stats{
   display:none;background:#fff5e9;border:1px solid var(--line);border-radius:11px;

@@ -64,6 +64,16 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
+def get(base, path, timeout=30):
+    try:
+        r = OPENER.open(base + path, timeout=timeout)
+        return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")[:300]
+    except Exception as e:  # noqa: BLE001
+        return 0, "%s: %s" % (type(e).__name__, e)
+
+
 def post(base, path, body, timeout=90):
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -154,6 +164,35 @@ def main():
                   "实际 %s" % (r.get("stats") or {}).get("llm_calls"))
         else:
             check("503 后自动重试并成功", False, b[:200])
+
+        print("== 后台任务与实时进度（生成页用的就是这条路径）")
+        st, b = post(base, "/api/agent", {"text": text, "max_rounds": 4, "reflect": False,
+                                          "async": True, "api": api})
+        if st == 200:
+            jid = json.loads(b).get("job_id")
+            check("提交后台任务拿到 job_id", bool(jid), b[:120])
+            steps, status, result = [], "running", None
+            for _ in range(60):
+                st2, b2 = get(base, "/api/agent/progress?id=" + str(jid))
+                if st2 != 200:
+                    break
+                j = json.loads(b2)
+                steps = j.get("steps") or []
+                status = j.get("status")
+                result = j.get("result")
+                if status != "running":
+                    break
+                time.sleep(0.4)
+            check("任务最终跑完", status == "done", "status=%s" % status)
+            check("进度有多条步骤（能看出在干什么）", len(steps) >= 3,
+                  "steps=%d → %s" % (len(steps), str(steps[:3])))
+            check("进度里写明了调用哪个工具",
+                  any("调用工具" in s for s in steps), str(steps)[:160])
+            check("任务结果里有 tag", bool((result or {}).get("positive")))
+        else:
+            check("提交后台任务拿到 job_id", False, b[:200])
+        st, b = get(base, "/api/agent/progress?id=nosuchjob")
+        check("不存在的任务号报 404", st == 404, "HTTP %s" % st)
 
         print("== 只重跑自省：POST /api/reflect")
         st, b = post(base, "/api/reflect", {"text": text,
