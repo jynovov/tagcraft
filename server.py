@@ -647,30 +647,80 @@ def _extract_json(text):
     return None
 
 
-def _post_chat(cfg, payload):
-    """向 OpenAI 兼容接口发一次聊天请求，返回解析后的响应体。"""
+# 这些状态码是"对方临时不行"，值得等一会儿再试一次
+TRANSIENT_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def _friendly_api_error(code, detail):
+    """把接口返回的错误 JSON 压成一句人话（顺便给出中文提示）。"""
+    msg = ""
+    try:
+        d = json.loads(detail)
+        err = d.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or ""
+        elif isinstance(err, str):
+            msg = err
+        msg = msg or d.get("message") or ""
+    except Exception:  # noqa: BLE001
+        msg = detail
+    msg = " ".join(str(msg).split())[:220]
+    hint = {400: "请求有问题", 401: "Key 不对", 403: "没有权限", 404: "地址或模型名不对",
+            408: "超时", 429: "请求太频繁", 500: "服务内部错误", 502: "网关错误",
+            503: "服务繁忙", 504: "网关超时"}.get(code, "")
+    return "接口返回 %s%s：%s" % (code, ("（%s）" % hint) if hint else "", msg)
+
+
+def _post_chat(cfg, payload, retries=2, retry_wait=1.6):
+    """向 OpenAI 兼容接口发一次聊天请求，返回解析后的响应体。
+
+    遇到 429 / 5xx / 网络抖动会自动重试（退避 1.6s、3.2s），
+    因为这类错误通常几秒后就恢复了，没必要让你重新生成一遍。
+    """
     api_base = (cfg.get("api_base") or "").strip()
     api_key = (cfg.get("api_key") or "").strip()
     if not api_base:
         raise RuntimeError("还没有配置大模型接口地址")
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        api_base, data=data,
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key},
-    )
     handlers = []
     proxy = (cfg.get("proxy") or "").strip()
-    if proxy:
+    if _is_local_url(api_base):
+        # 本地大模型（Ollama / LM Studio 等）：直连，不能被系统代理劫持
+        handlers.append(urllib.request.ProxyHandler({}))
+    elif proxy:
         handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
     opener = urllib.request.build_opener(*handlers)
-    try:
-        with opener.open(req, timeout=int(cfg.get("timeout", 120))) as resp:
-            return json.loads(resp.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:500]
-        raise RuntimeError("接口返回 %s：%s" % (e.code, detail))
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError("调用失败：%s" % e)
+    timeout = int(cfg.get("timeout", 120))
+
+    tries = max(1, int(retries) + 1)
+    for attempt in range(tries):
+        req = urllib.request.Request(
+            api_base, data=data,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key},
+        )
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:600]
+            msg = _friendly_api_error(e.code, detail)
+            if e.code in TRANSIENT_CODES and attempt < tries - 1:
+                wait = retry_wait * (2 ** attempt)
+                log("大模型接口返回 %s，%.1fs 后重试（第 %d/%d 次）"
+                    % (e.code, wait, attempt + 2, tries))
+                time.sleep(wait)
+                continue
+            raise RuntimeError(msg)
+        except Exception as e:  # noqa: BLE001
+            # 网络抖动 / 超时也值得重试一次
+            if attempt < tries - 1 and isinstance(
+                    e, (urllib.error.URLError, TimeoutError, OSError)):
+                wait = retry_wait * (2 ** attempt)
+                log("调用大模型失败（%s），%.1fs 后重试（第 %d/%d 次）"
+                    % (e, wait, attempt + 2, tries))
+                time.sleep(wait)
+                continue
+            raise RuntimeError("调用失败：%s" % e)
 
 
 def ping_llm(cfg):
@@ -1009,7 +1059,7 @@ def self_refine(cfg, text, result, rounds=2, threshold=92):
             "messages": [{"role": "system", "content": CRITIC_SYSTEM},
                          {"role": "user", "content": ask}],
             "temperature": 0.2, "stream": False,
-        })
+        }, retries=3)
         result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
         try:
             content = body["choices"][0]["message"].get("content") or ""
@@ -1054,16 +1104,21 @@ def self_refine(cfg, text, result, rounds=2, threshold=92):
 # ---------------------------------------------------------------- ComfyUI 对接
 
 
+def _is_local_url(url):
+    """判断是不是本机 / 内网地址（这类地址不该走代理）。"""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return (host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+            or host.startswith("127.") or host.startswith("192.168.")
+            or host.startswith("10."))
+
+
 def _opener_for(url):
     """本机 / 内网地址不走代理。
 
     Hiddify、Clash 这类客户端会把 Windows 系统代理打开，而 urllib 会读取这份设置，
     于是连 http://127.0.0.1:8188 的请求也被塞给代理，结果明明 ComfyUI 开着却报 502。
     """
-    host = (urllib.parse.urlparse(url).hostname or "").lower()
-    if (host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
-            or host.startswith("127.") or host.startswith("192.168.")
-            or host.startswith("10.")):
+    if _is_local_url(url):
         return urllib.request.build_opener(urllib.request.ProxyHandler({}))
     return urllib.request.build_opener()
 
@@ -1439,6 +1494,40 @@ class Handler(BaseHTTPRequestHandler):
                 "negative_unknown": unknown_neg,
                 "notes": parsed.get("notes", ""),
                 "usage": usage,
+            })
+
+        if path == "/api/reflect":
+            # 只重跑自省：接口繁忙导致自省失败时，用它补救，不用重新生成整套 tag
+            text = (body.get("text") or "").strip()
+            cfg = load_config()
+            ui = body.get("api") or {}
+            for k in ("api_base", "api_key", "model"):
+                if (ui.get(k) or "").strip():
+                    cfg[k] = ui[k].strip()
+            if not (cfg.get("api_key") or "").strip():
+                return self._send(400, {"error": "还没有填 API Key"})
+            pos = [str(t).strip() for t in (body.get("positive") or []) if str(t).strip()]
+            neg = [str(t).strip() for t in (body.get("negative") or []) if str(t).strip()]
+            if not pos and not neg:
+                return self._send(400, {"error": "没有可评审的 tag"})
+            valid, unknown = validate_tags(pos)
+            valid_neg, unknown_neg = validate_tags(neg)
+            result = {"positive": valid, "positive_unknown": unknown,
+                      "negative": valid_neg, "negative_unknown": unknown_neg,
+                      "stats": {"llm_calls": 0, "tool_calls": 0}}
+            try:
+                review = self_refine(cfg, text, result,
+                                     rounds=int(body.get("reflect_rounds") or 2))
+            except Exception as e:  # noqa: BLE001
+                return self._send(500, {"error": str(e)})
+            log("重跑自省：%s 轮%s" % (review.get("iterations"),
+                                    ("（%s 分）" % review.get("final_score"))
+                                    if review.get("final_score") is not None else ""))
+            return self._send(200, {
+                "review": review,
+                "positive": result["positive"], "positive_unknown": result["positive_unknown"],
+                "negative": result["negative"], "negative_unknown": result["negative_unknown"],
+                "stats": result["stats"],
             })
 
         if path == "/api/agent":

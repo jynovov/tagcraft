@@ -176,7 +176,12 @@ tagcraft/
 ├── make_icon_from_image.py       图标生成脚本
 ├── ico_util.py                   手写 ICO 容器
 ├── tests/smoke_test.py           冒烟测试（服务端 + 页面）
+├── tests/agent_test.py           智能体测试（自带假大模型，免 Key）
+├── tests/comfy_test.py           ComfyUI 对接测试（自带假 ComfyUI）
+├── tests/mock_llm.py             假大模型（按剧本发工具调用）
+├── tests/mock_comfy.py           假 ComfyUI（只实现两个接口）
 ├── tests/ui_test.js              界面逻辑测试（草稿箱，node 直跑）
+├── tests/ui_favorites_test.js    收藏页测试（隐私收起 / 改名）
 ├── docs/                         中文文档
 ├── assets/                       图标（含版权说明，见其 README）
 └── data/
@@ -207,6 +212,18 @@ set TAGCRAFT_TEST_URL=http://127.0.0.1:8848
 python tests/smoke_test.py
 ```
 
+**智能体测试**（不需要 API Key：自带假大模型，验证工具循环 / 自省 / 降级 / 出错重试）：
+
+```bat
+python tests/agent_test.py
+```
+
+**ComfyUI 对接测试**（不需要显卡：自带假 ComfyUI，验证节点识别与文本写入）：
+
+```bat
+python tests/comfy_test.py
+```
+
 **界面逻辑测试**（草稿箱：保存 / 切换 / 复制 / 改名 / 清空 / 删除 / 旧数据迁移 / 换页恢复）：
 
 ```bat
@@ -219,12 +236,10 @@ node tests/ui_test.js
 node tests/ui_favorites_test.js
 ```
 
-它们用一套极简 DOM 桩把 `common.js` 和对应页面脚本装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
+后两个用一套极简 DOM 桩把 `common.js` 和对应页面脚本装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
 
-它用一套极简 DOM 桩把 `common.js` + `app.js` 装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
-
-> 冒烟测试会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
-> Python 会把 `127.0.0.1` 的请求也发给代理，导致整片误报 502。服务端访问 ComfyUI 时同样做了直连处理。
+> 会联网的测试都会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
+> Python 会把 `127.0.0.1` 的请求也发给代理，导致整片误报 502。服务端访问 ComfyUI 和本地大模型时同样做了直连处理。
 
 ## 数据来源与致谢
 

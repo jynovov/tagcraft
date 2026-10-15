@@ -273,10 +273,19 @@ function renderReview() {
   if (!rv) { box.hidden = true; $('review').innerHTML = ''; return; }
   box.hidden = false;
   const rounds = rv.rounds || [];
-  $('reviewSum').textContent = '自省评审 · ' + rounds.length + ' 轮' +
-    (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
+  $('reviewSum').textContent = rv.error
+    ? '自省评审 · 未完成（点开可重试）'
+    : '自省评审 · ' + rounds.length + ' 轮' +
+      (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
   if (rv.error) {
-    $('review').innerHTML = '<div class="step warn">' + rv.error + '</div>';
+    $('review').innerHTML =
+      '<div class="step"><span class="tool">提示</span><span class="sum">' +
+      '自省这一步没跑完，上面的 tag 结果是好的，可以直接用。</span></div>' +
+      '<div class="step warn">' + escHtml(rv.error) + '</div>' +
+      '<div class="step"><button class="small" id="btnRetryReflect">重试自省</button>' +
+      '<span class="sum">只重跑评审，不会改动已生成的内容</span></div>';
+    const b = $('review').querySelector('#btnRetryReflect');
+    if (b) b.addEventListener('click', retryReflect);
     return;
   }
   $('review').innerHTML = rounds.map((r, i) => {
@@ -293,6 +302,58 @@ function renderReview() {
         ${probs}${miss}
       </div>`;
   }).join('');
+}
+
+/** 用接口返回的 tag 列表刷新界面（生成页与「重试自省」共用） */
+function applyResult(r) {
+  state.quality = [];
+  state.positive = [];
+  state.unknown = [];
+  for (const h of (r.positive || [])) {
+    const c = { tag: h.tag, cn: h.cn || '', category: h.category,
+                post_count: h.post_count || 0, weight: 1, policy: h.policy };
+    (isQuality(c) ? state.quality : state.positive).push(c);
+  }
+  (r.positive_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'pos' })));
+  state.negative = (r.negative || []).map(h => ({
+    tag: h.tag, cn: h.cn || '', category: h.category,
+    post_count: h.post_count || 0, weight: 1, policy: h.policy }));
+  (r.negative_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'neg' })));
+  tidy();
+}
+
+/** 只重跑自省（接口繁忙导致自省失败时用） */
+async function retryReflect() {
+  const st = loadSettings();
+  const tags = state.quality.concat(state.positive).map(c => c.tag);
+  if (!tags.length && !state.negative.length) { toast('还没有 tag 可以评审', true); return; }
+  const btn = $('review').querySelector('#btnRetryReflect');
+  if (btn) { btn.disabled = true; btn.textContent = '自省中…'; }
+  toast('正在重试自省…');
+  try {
+    const r = await api('/api/reflect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: $('inputText').value,
+        positive: tags,
+        negative: state.negative.map(c => c.tag),
+        reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
+        api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+      })
+    });
+    applyResult(r);
+    state.review = r.review || null;
+    if (state.stats) {
+      state.stats.model += (r.stats && r.stats.llm_calls) || 0;
+      state.stats.checked = tags.length + state.negative.length;
+    }
+    const sc = r.review && r.review.final_score;
+    toast(sc != null ? '自省完成：' + sc + ' 分' : '自省完成');
+    render();
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = '重试自省'; }
+  }
 }
 
 function fmt(c, withWeight) {
@@ -489,21 +550,9 @@ async function generate() {
       render();
       return;
     }
-    state.quality = [];
-    state.positive = [];
-    state.unknown = [];
     state.trace = r.trace || [];
     state.review = r.review || null;
-    for (const h of (r.positive || [])) {
-      const c = { tag: h.tag, cn: h.cn || '', category: h.category,
-                  post_count: h.post_count || 0, weight: 1, policy: h.policy };
-      (isQuality(c) ? state.quality : state.positive).push(c);
-    }
-    (r.positive_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'pos' })));
-    state.negative = (r.negative || []).map(h => ({
-      tag: h.tag, cn: h.cn || '', category: h.category,
-      post_count: h.post_count || 0, weight: 1, policy: h.policy }));
-    (r.negative_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'neg' })));
+    applyResult(r);
     state.notes = r.notes || '';
     const box = r.stats || {};
     state.stats = {
@@ -516,7 +565,6 @@ async function generate() {
         : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
       ms: Date.now() - t0
     };
-    tidy();
     if (agent && r.tools_used === false) {
       toast('该接口不支持工具调用，已降级为单次生成', true);
     } else {
