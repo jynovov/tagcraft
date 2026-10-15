@@ -623,9 +623,10 @@ async function pollJob(jid, btn) {
   clearTimeout(pollTimer);
   try {
     const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
-    const startedAt = (state.progress && state.progress.startedAt) || Date.now();
+    const prev = state.progress || {};
     state.progress = { pct: j.pct || 0, msg: j.msg || '', status: j.status,
-                       startedAt: startedAt, done: j.status !== 'running' };
+                       startedAt: prev.startedAt || Date.now(), shown: prev.shown,
+                       done: j.status !== 'running' };
     if (j.status === 'running') {
       render();
       pollTimer = setTimeout(() => pollJob(jid, btn), 400);
@@ -669,15 +670,25 @@ function hideProgressLater() {
   }
 }
 
-/** 页面重新打开时，如果上一次的任务还在跑，接着显示进度 */
+/** 页面重新打开时接上上一次的任务：
+ *  - 还在跑 → 继续轮询显示进度
+ *  - 已经跑完（在别的页面跑完的） → 直接把结果填回界面，不能丢
+ */
 async function resumeJob() {
   const jid = sessionStorage.getItem(LS_JOB);
   if (!jid) return false;
+  let j;
   try {
-    const j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
-    if (j.status !== 'running') { sessionStorage.removeItem(LS_JOB); return false; }
+    j = await api('/api/agent/progress?id=' + encodeURIComponent(jid));
+  } catch (e) {
+    // 任务不存在（例如服务重启过）：清掉记录，静默继续
+    sessionStorage.removeItem(LS_JOB);
+    return false;
+  }
+  if (j.status === 'running') {
     state.progress = { pct: j.pct || 0, msg: j.msg || '', status: 'running',
-                       startedAt: Date.now(), done: false };
+                       startedAt: (state.progress && state.progress.startedAt) || Date.now(),
+                       done: false };
     const btn = $('btnGenerate');
     btn.disabled = true;
     btn.textContent = '智能体运行中…';
@@ -686,10 +697,29 @@ async function resumeJob() {
     pollJob(jid, btn);
     toast('上一轮智能体任务还在跑，已接上进度');
     return true;
-  } catch (e) {
-    sessionStorage.removeItem(LS_JOB);
-    return false;
   }
+
+  // 已经结束：把结果 / 报错补回界面
+  sessionStorage.removeItem(LS_JOB);
+  if (j.status === 'error' || j.error) {
+    state.progress = { pct: 100, msg: '失败：' + (j.error || ''), status: 'error',
+                       startedAt: Date.now(), done: true };
+    state.notes = j.error || '';
+    render();
+    toast('上一轮智能体任务失败了：' + (j.error || ''), true);
+    setTimeout(hideProgressLater, 6000);
+    return true;
+  }
+  const res = j.result || {};
+  if (!res || !(res.positive || res.negative)) return false;
+  state.progress = { pct: 100, msg: '完成', status: 'done',
+                     startedAt: Date.now(), done: true };
+  finishGenerate(res, 0);
+  render();
+  pushHistory(state.lastText || $('inputText').value);
+  toast('上一轮的结果已取回（在别的页面跑完的）');
+  setTimeout(hideProgressLater, 4000);
+  return true;
 }
 
 function startTick() {
@@ -721,12 +751,15 @@ function renderProgress() {
   // 这样 400ms 才轮询一次也不会一格一格地跳。
   const target = p.done ? 100 : Math.max(0, Math.min(97, p.pct || 0));
   if (typeof p.shown !== 'number') p.shown = target;   // 首次直接显示真实值，之后再平滑
+  // 平滑追目标；追上了就慢慢往上爬（最多比真实目标多 6%），保证"看起来一直在动"
+  const cap = p.done ? 100 : Math.min(96.5, target + 6);
   if (p.shown < target) {
-    p.shown = Math.min(target, p.shown + Math.max(0.6, (target - p.shown) * 0.28));
-  } else if (p.shown > target) {
-    p.shown = target;
+    p.shown = Math.min(target, p.shown + Math.max(0.5, (target - p.shown) * 0.3));
+  } else if (p.shown < cap) {
+    p.shown = Math.min(cap, p.shown + 0.25);
   }
-  const pct = Math.round(p.done ? 100 : p.shown);
+  if (p.done) p.shown = 100;
+  const pct = Math.round(p.shown);
 
   let head;
   if (!p.done) {

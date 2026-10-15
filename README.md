@@ -184,6 +184,7 @@ tagcraft/
 ├── tests/mock_comfy.py           假 ComfyUI（只实现两个接口）
 ├── tests/ui_test.js              界面逻辑测试（草稿箱，node 直跑）
 ├── tests/ui_favorites_test.js    收藏页测试（隐私收起 / 改名）
+├── tests/progress_e2e_test.js    进度条端到端测试（真实服务 + 真实前端逻辑）
 ├── docs/                         中文文档
 ├── assets/                       图标（含版权说明，见其 README）
 └── data/
@@ -238,7 +239,13 @@ node tests/ui_test.js
 node tests/ui_favorites_test.js
 ```
 
-后两个用一套极简 DOM 桩把 `common.js` 和对应页面脚本装进 node 的 `vm` 里跑，不需要浏览器，也不需要任何第三方依赖。
+**进度条端到端测试**（真实 app.js + 真实服务：验证进度逐步推进、切页期间跑完的结果能取回）：
+
+```bat
+node tests/progress_e2e_test.js
+```
+
+后三个用极简 DOM 桩把 `common.js` 和页面脚本装进 node 的 `vm` 里跑，不需要浏览器；倒第二个会另外拉起服务与假大模型。
 
 > 会联网的测试都会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
 > Python 会把 `127.0.0.1` 的请求也发给代理，导致整片误报 502。服务端访问 ComfyUI 和本地大模型时同样做了直连处理。
