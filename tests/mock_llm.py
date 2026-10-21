@@ -47,7 +47,6 @@ KREA_PROMPT_V1 = ("A girl in a school uniform and over-the-knee socks stands on 
                   "cinematic anime illustration.")
 KREA_PROMPT_V2 = (KREA_PROMPT_V1 + " Soft rim light outlines her hair, a gentle sea breeze, "
                   "muted orange and violet sky.")
-KREA_NEG = "blurry, low quality, extra fingers, watermark, text"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -111,11 +110,10 @@ class Handler(BaseHTTPRequestHandler):
                         "problems": ["提示词偏笼统，缺少光比和氛围细节"],
                         "missing": ["没有体现海风与天色渐变"],
                         "prompt": KREA_PROMPT_V2,
-                        "negative": KREA_NEG,
                     }, ensure_ascii=False))
                 return reply(json.dumps({
                     "score": 95, "problems": [], "missing": [],
-                    "prompt": KREA_PROMPT_V2, "negative": KREA_NEG,
+                    "prompt": KREA_PROMPT_V2,
                 }, ensure_ascii=False))
             if done == 0:
                 return reply(json.dumps({
@@ -142,7 +140,6 @@ class Handler(BaseHTTPRequestHandler):
                     "arguments": json.dumps({"query": "过膝袜"}, ensure_ascii=False)}}])
             return reply(json.dumps({
                 "prompt": KREA_PROMPT_V1,
-                "negative": KREA_NEG,
                 "notes": "按 Krea 2 的散文式写法整理，突出黄昏逆光",
             }, ensure_ascii=False))
 

@@ -135,8 +135,8 @@ def main():
             check("给出的是英文句子（不是 tag 串）",
                   " " in prompt and "over-the-knee socks" in prompt, prompt[:60])
             check("没有混进 tag 字段", not r.get("positive") and not r.get("positive_unknown"))
-            check("负向提示词是英文短语", "blurry" in (r.get("negative") or ""),
-                  r.get("negative"))
+            check("Krea2 结果不带负向提示词", "negative" not in r,
+                  str(r.get("negative")))
             check("词数统计可用", stats.get("words", 0) >= 20, str(stats.get("words")))
             check("工具调用 1 次（术语对照）", stats.get("tool_calls") == 1,
                   str(stats.get("tool_calls")))
@@ -175,7 +175,7 @@ def main():
         if st == 200:
             r = json.loads(b)
             check("单次生成给出英文提示词", bool(r.get("prompt")), b[:120])
-            check("单次生成带负向提示词", "blurry" in (r.get("negative") or ""))
+            check("单次生成不带负向提示词", "negative" not in r)
             check("单次生成词数正确", (r.get("stats") or {}).get("words") > 0,
                   str((r.get("stats") or {}).get("words")))
             check("单次生成没有工具调用", (r.get("stats") or {}).get("tool_calls") == 0)
@@ -186,18 +186,17 @@ def main():
         st, b = post(base, "/api/reflect", {
             "text": text, "prompt_model": "krea",
             "prompt": "A girl on a beach at dusk, warm light.",
-            "negative": "blurry, watermark",
             "reflect_rounds": 2, "api": api})
         if st == 200:
             r = json.loads(b)
             check("krea 自省返回 review", (r.get("review") or {}).get("final_score") in (78, 95))
             check("krea 自省返回改写后的提示词", "Soft rim light" in (r.get("prompt") or ""),
                   (r.get("prompt") or "")[:80])
-            check("krea 自省保留负向提示词", "blurry" in (r.get("negative") or ""))
+            check("krea 自省不返回负向字段", "negative" not in r)
         else:
             check("krea 自省返回 review", False, b[:200])
         st, b = post(base, "/api/reflect", {"text": text, "prompt_model": "krea",
-                                            "prompt": "", "negative": "", "api": api})
+                                            "prompt": "", "api": api})
         check("没有提示词时拒绝 krea 自省", st == 400 and "提示词" in b, "HTTP %s" % st)
 
         print("== 开关：不用工具 / 不开自省")

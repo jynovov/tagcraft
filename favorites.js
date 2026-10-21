@@ -49,14 +49,13 @@ function kreaCard(f, i) {
           <div class="ftext">${escapeHtml(text) || '（没有填描述）'}</div>
           <div class="flabel">英文提示词</div>
           <div class="ftext">${escapeHtml(prompt) || '（无）'}</div>
-          <div class="flabel">负向提示词</div>
-          <div class="ftext">${escapeHtml(neg) || '（无）'}</div>
+          ${neg ? '<div class="flabel">负向提示词（旧记录）</div>' +
+                  '<div class="ftext">' + escapeHtml(neg) + '</div>' : ''}
         </div>
       </details>
       <div class="frow">
         <button class="small primary" data-load="${i}">载入 Krea2 页</button>
         <button class="small" data-copy="${i}">复制提示词</button>
-        <button class="small" data-copyneg="${i}">复制负向</button>
         <span class="spacer"></span>
         <button class="small ghost" data-rename="${i}">改名</button>
         <button class="small ghost danger" data-del="${i}">删除</button>

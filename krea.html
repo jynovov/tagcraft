@@ -85,20 +85,14 @@
           <div id="warnLine" class="warn-line"></div>
 
           <label>英文提示词</label>
-          <textarea id="outPrompt" rows="8" placeholder="生成后会出现在这里"></textarea>
+          <textarea id="outPrompt" rows="9" placeholder="生成后会出现在这里"></textarea>
           <div class="row">
             <span id="promptCount" class="prompt-count">0 词</span>
             <span class="spacer" style="flex:1"></span>
             <button id="btnCopyPrompt" class="small primary">复制提示词</button>
           </div>
-
-          <label style="margin-top:14px">负向提示词</label>
-          <textarea id="outNeg" rows="2" placeholder="blurry, low quality, watermark"></textarea>
           <div class="row">
-            <button id="btnCopyNeg" class="small">复制负向</button>
             <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
-          </div>
-          <div class="row">
             <a href="/comfy.html" class="page-sub">去配置 ComfyUI →</a>
           </div>
         </div>

@@ -10,7 +10,6 @@ const LS_KREA_CUR = 'tagcraft.krea.cur';
 
 const state = {
   prompt: '',
-  negative: '',
   notes: '',
   trace: [],
   review: null,
@@ -43,7 +42,6 @@ function draftPayload() {
     text: $('inputText').value,
     agent: $('useAgent').checked,
     prompt: state.prompt,
-    negative: state.negative,
     notes: state.notes,
     trace: state.trace,
     review: state.review,
@@ -56,7 +54,7 @@ function emptyDraft(name) {
     id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     name: name || '新草稿', time: Date.now(),
     text: '', agent: true,
-    prompt: '', negative: '', notes: '', trace: [], review: null, stats: null
+    prompt: '', notes: '', trace: [], review: null, stats: null
   };
 }
 
@@ -77,7 +75,6 @@ function restoreWork() {
   $('inputText').value = d.text || '';
   $('useAgent').checked = d.agent !== false;
   state.prompt = d.prompt || '';
-  state.negative = d.negative || '';
   state.notes = d.notes || '';
   state.trace = d.trace || [];
   state.review = d.review || null;
@@ -118,7 +115,7 @@ function renderDraftBar() {
 
 function resetView() {
   $('inputText').value = '';
-  state.prompt = ''; state.negative = ''; state.notes = '';
+  state.prompt = ''; state.notes = '';
   state.trace = []; state.review = null; state.stats = null;
   state.progress = null; state.warnings = [];
 }
@@ -200,7 +197,6 @@ function wordCount(text) {
 
 function render() {
   $('outPrompt').value = state.prompt || '';
-  $('outNeg').value = state.negative || '';
   const words = wordCount(state.prompt);
   $('promptCount').innerHTML = '共 <b>' + words + '</b> 词' +
     (state.prompt ? ' · 建议 60~120 词' : '');
@@ -296,7 +292,6 @@ function finishGenerate(r, ms) {
   state.trace = r.trace || [];
   state.review = r.review || null;
   state.prompt = r.prompt || '';
-  state.negative = r.negative || r.negative_prompt || '';
   state.notes = r.notes || '';
   const box = r.stats || {};
   state.warnings = box.warnings || [];
@@ -528,9 +523,7 @@ function pushHistory(text) {
     text: text.slice(0, 80),
     full: text,
     prompt: state.prompt,
-    negative: state.negative,
     pos: [state.prompt],
-    neg: [state.negative],
     time: new Date().toLocaleString()
   });
   saveHistory(list);
@@ -551,13 +544,11 @@ async function retryReflect() {
         text: $('inputText').value,
         prompt_model: 'krea',
         prompt: state.prompt,
-        negative: state.negative,
         reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
         api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
       })
     });
     state.prompt = r.prompt || state.prompt;
-    state.negative = r.negative || state.negative;
     state.review = r.review || null;
     state.warnings = (r.stats && r.stats.warnings) || state.warnings;
     if (state.stats) {
@@ -578,9 +569,8 @@ async function retryReflect() {
 function favCurrent() {
   const text = $('inputText').value.trim();
   if (!text && !state.prompt) { toast('还没有内容可收藏', true); return; }
-  const item = makeFav(text, [], [state.prompt], [state.negative],
-                       { kind: 'krea', model: 'krea', prompt: state.prompt,
-                         negative: state.negative });
+  const item = makeFav(text, [], [state.prompt], [],
+                       { kind: 'krea', model: 'krea', prompt: state.prompt });
   const n = addFav(item);
   toast('已收藏「' + item.title + '」（共 ' + n + ' 条）');
 }
@@ -610,14 +600,13 @@ async function sendToComfy() {
         url: cfg.url || 'http://127.0.0.1:8188',
         workflow: cfg.workflow,
         positive: pos,
-        negative: ($('outNeg').value || '').trim(),
-        positive_node: cfg.positiveNode || '',
-        negative_node: cfg.negativeNode || ''
+        positive_node: cfg.positiveNode || ''
       })
     });
     toast('已排队出图（' + String(r.prompt_id || '').slice(0, 8) + '…）');
     state.notes = '已发送到 ComfyUI：正向写进节点 ' + r.positive_node +
-      '，负向写进节点 ' + r.negative_node + ' · prompt_id ' + r.prompt_id;
+      (r.negative_node ? '，负向写进节点 ' + r.negative_node : '（没有负向节点，只写正向）') +
+      ' · prompt_id ' + r.prompt_id;
     render();
   } catch (e) {
     toast(e.message, true);
@@ -653,7 +642,6 @@ async function doTerm() {
 function loadRecord(item) {
   $('inputText').value = item.full || item.text || '';
   state.prompt = item.prompt || [].concat(item.pos || []).join('\n');
-  state.negative = item.negative || [].concat(item.neg || []).join('\n');
   state.notes = '';
   state.trace = [];
   state.review = null;
@@ -705,7 +693,6 @@ function init() {
 
   $('btnFav').addEventListener('click', favCurrent);
   $('btnCopyPrompt').addEventListener('click', () => copy($('outPrompt').value));
-  $('btnCopyNeg').addEventListener('click', () => copy($('outNeg').value));
   $('btnSendComfy').addEventListener('click', sendToComfy);
   $('btnTerm').addEventListener('click', doTerm);
   $('termInput').addEventListener('keydown', e => { if (e.key === 'Enter') doTerm(); });
@@ -716,10 +703,6 @@ function init() {
     const w = $('warnLine'); w.classList.remove('show');
     $('promptCount').innerHTML = '共 <b>' + wordCount(state.prompt) + '</b> 词' +
       (state.prompt ? ' · 建议 60~120 词' : '');
-    saveWork();
-  });
-  $('outNeg').addEventListener('input', () => {
-    state.negative = $('outNeg').value;
     saveWork();
   });
 

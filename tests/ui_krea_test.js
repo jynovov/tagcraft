@@ -4,7 +4,7 @@
  *
  * 重点锁定：
  *   1. 草稿箱 —— 与 tag 页同样的保存 / 切换 / 复制 / 改名 / 删除，但存在独立键里
- *   2. 渲染 —— 英文提示词、词数、负向提示词、写法提醒都能显示
+ *   2. 渲染 —— 英文提示词、词数、写法提醒都能显示
  *   3. 记录互通 —— 收藏 / 历史里能带 kind=krea 字段，载入时能恢复提示词
  *   4. 模型切换器 —— 两个模型都在，当前页高亮正确
  *
@@ -84,14 +84,14 @@ chk('不和 tag 草稿共用键', localStorage.getItem('tagcraft.works') === nul
 /* ---------- 2. 生成结果落回界面 ---------- */
 document.getElementById('inputText').value = '黄昏海边女生回头';
 state.prompt = WORDY;
-state.negative = 'blurry, low quality, watermark';
 state.warnings = ['出现了权重语法，Krea 2 不需要'];
 state.stats = { model: 4, tool_calls: 1, words: 28, ms: 5200 };
 state.trace = [{ round: 1, tool: 'lookup_term', args: {}, summary: '术语查「过膝袜」' }];
 state.review = { rounds: [{ round: 1, score: 95, changed: 1 }], final_score: 95, iterations: 1 };
 render();
 chk('英文提示词写进输出框', document.getElementById('outPrompt').value === WORDY);
-chk('负向提示词写进输出框', document.getElementById('outNeg').value.indexOf('blurry') >= 0);
+chk('页面逻辑里不再有负向字段', state.negative === undefined &&
+    draftPayload().negative === undefined);
 chk('词数显示正确', document.getElementById('promptCount').innerHTML.indexOf('28') >= 0,
     document.getElementById('promptCount').innerHTML);
 chk('统计行显示术语查询次数',
@@ -112,13 +112,12 @@ chk('新建后清空界面', state.prompt === '' && document.getElementById('inp
 chk('新建后草稿数 +1', drafts.length === 2);
 document.getElementById('inputText').value = '雨夜天台撑伞';
 state.prompt = 'A girl holding an umbrella on a rooftop at night in the rain.';
-state.negative = 'blurry';
 render();
 chk('草稿 A 的提示词还在',
     drafts.find(d => d.id === idA).prompt.indexOf('over-the-knee') >= 0);
 switchDraft(idA);
 chk('切回后提示词恢复', state.prompt.indexOf('over-the-knee') >= 0);
-chk('切回后负向恢复', state.negative.indexOf('watermark') >= 0);
+chk('草稿里不再保存负向字段', curDraft().negative === undefined);
 copyDraft();
 chk('复制后共 3 份', drafts.length === 3);
 chk('副本名字带「副本」', (curDraft().name || '').indexOf('副本') >= 0);
@@ -138,7 +137,6 @@ drafts = []; curId = null;
 initDrafts();
 document.getElementById('inputText').value = '切页测试';
 state.prompt = WORDY;
-state.negative = 'blurry';
 render();
 drafts = []; curId = null;
 initDrafts();
@@ -156,8 +154,8 @@ chk('NoobAI 项指回生成页', ms.indexOf('href="/"') >= 0);
 chk('Krea2 项指向专用页', ms.indexOf('href="/krea.html"') >= 0);
 
 /* ---------- 6. 收藏 / 历史互通 ---------- */
-const fav = makeFav('黄昏海边', [], [WORDY], ['blurry'],
-                    { kind: 'krea', model: 'krea', prompt: WORDY, negative: 'blurry' });
+const fav = makeFav('黄昏海边', [], [WORDY], [],
+                    { kind: 'krea', model: 'krea', prompt: WORDY });
 chk('收藏记录带 kind=krea', fav.kind === 'krea' && fav.prompt === WORDY);
 addFav(fav);
 chk('收藏能按记录过滤出 Krea2', isKreaRecord(loadFavs()[0]));
@@ -175,15 +173,15 @@ chk('Krea2 历史也受 10 条上限约束', loadHistory().length === 10, String
 chk('历史第一条保留 kind', loadHistory()[0].kind === 'krea');
 
 /* ---------- 7. 从收藏 / 历史载入 ---------- */
-state.prompt = ''; state.negative = '';
-loadRecord({ text: '载入测试', kind: 'krea', prompt: WORDY, negative: 'blurry' });
+state.prompt = '';
+loadRecord({ text: '载入测试', kind: 'krea', prompt: WORDY });
 chk('载入后描述恢复', document.getElementById('inputText').value === '载入测试');
 chk('载入后提示词恢复', state.prompt === WORDY);
-chk('载入后负向恢复', state.negative === 'blurry');
+chk('载入不会带出负向字段', state.negative === undefined);
 
 /* ---------- 8. 完成回流（finishGenerate） ---------- */
-state.prompt = ''; state.negative = '';
-finishGenerate({ mode: 'natural', prompt: WORDY, negative: 'blurry',
+state.prompt = '';
+finishGenerate({ mode: 'natural', prompt: WORDY,
                  notes: '黄昏逆光', trace: [], review: null,
                  stats: { llm_calls: 2, tool_calls: 1, words: 28, warnings: [] } }, 3000);
 chk('finishGenerate 填回提示词', state.prompt === WORDY);

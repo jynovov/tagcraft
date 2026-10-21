@@ -135,7 +135,8 @@ function waitUp(port, ms = 25000) {
     }
     await sleep(300);
     const out = JSON.parse(vm.runInContext(
-      'JSON.stringify({prompt: state.prompt, neg: state.negative, words: state.stats && state.stats.words, ' +
+      'JSON.stringify({prompt: state.prompt, noNeg: state.negative === undefined, ' +
+      'words: state.stats && state.stats.words, ' +
       'review: state.review && state.review.final_score, out: document.getElementById("outPrompt").value})', ctx));
     const toasts = created.filter(e => String(e.className).indexOf('toast') >= 0)
                           .map(e => String(e.textContent || ''));
@@ -148,7 +149,7 @@ function waitUp(port, ms = 25000) {
     check('英文提示词填回界面', out.prompt.indexOf('over-the-knee socks') >= 0,
           out.prompt.slice(0, 60));
     check('结果框里也是同一段提示词', out.out === out.prompt);
-    check('负向提示词有内容', out.neg.indexOf('blurry') >= 0, out.neg);
+    check('Krea2 不再生成负向提示词', out.noNeg === true);
     check('词数统计已填上', out.words >= 20, String(out.words));
     check('自省改写后的版本被采用（含 Soft rim light）',
           out.prompt.indexOf('Soft rim light') >= 0, out.prompt.slice(-60));

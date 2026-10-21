@@ -184,6 +184,32 @@ def main():
         else:
             check("自定义节点文本也写对了", False, b[:150])
 
+        print("== 只有一个文本节点（Krea 2 常见工作流）")
+        wf1 = {
+            "1": {"class_type": "KSampler", "inputs": {"positive": ["2", 0]}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "old prompt"}},
+        }
+        st, b = req(base, "/api/comfy/inspect", {"workflow": wf1})
+        if st == 200:
+            r = json.loads(b)
+            check("单词条工作流没有负向节点",
+                  r.get("positive_node") == "2" and r.get("negative_node") == "",
+                  "pos=%s neg=%s" % (r.get("positive_node"), r.get("negative_node")))
+        else:
+            check("单词条工作流没有负向节点", False, b[:120])
+        st, b = req(base, "/api/comfy/send", {"url": mock_url, "workflow": wf1,
+                                              "positive": "KREA PROMPT"})
+        if st == 200:
+            r = json.loads(b)
+            got = recv().get("prompt") or {}
+            check("单词条工作流发送成功", r.get("positive_node") == "2" and
+                  not r.get("negative_node"), str(r.get("negative_node")))
+            check("单词条工作流只写正向且内容正确",
+                  got.get("2", {}).get("inputs", {}).get("text") == "KREA PROMPT",
+                  got.get("2", {}).get("inputs", {}).get("text"))
+        else:
+            check("单词条工作流发送成功", False, b[:150])
+
         print("== 手动指定节点 id 与边界情况")
         st, b = req(base, "/api/comfy/send", {"url": mock_url, "workflow": WF,
                                               "positive": "P", "negative": "N",

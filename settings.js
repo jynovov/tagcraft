@@ -51,6 +51,10 @@ async function loadStatus() {
   $('systemPrompt').value = saved || defaultPrompt;
   const savedKrea = localStorage.getItem(LS_PROMPT_KREA);
   $('systemPromptKrea').value = savedKrea || defaultKreaPrompt;
+  if (!defaultKreaPrompt) {
+    $('systemPromptKrea').placeholder =
+      '服务端没返回 Krea2 提示词，可能还是旧版本：重启 TagCraft 后这里会自动填上';
+  }
 }
 
 function fill() {

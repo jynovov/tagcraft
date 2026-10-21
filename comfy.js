@@ -50,9 +50,10 @@ function init() {
       });
       const lines = (r.nodes || []).map(n =>
         `节点 ${n.id}（${n.class_type}）${n.looks_negative ? '负向' : '正向'}｜现在装着：${n.text || '（空）'}`);
-      box.textContent = `正向 → 节点 ${r.positive_node}，负向 → 节点 ${r.negative_node}　·　` +
+      const neg = r.negative_node || '（无，只写正向）';
+      box.textContent = `正向 → 节点 ${r.positive_node}，负向 → 节点 ${neg}　·　` +
         lines.join('　·　');
-      toast('识别完成：正向 ' + r.positive_node + ' / 负向 ' + r.negative_node);
+      toast('识别完成：正向 ' + r.positive_node + ' / 负向 ' + neg);
     } catch (e) {
       box.textContent = '';
       toast(e.message, true);

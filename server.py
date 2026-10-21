@@ -217,10 +217,9 @@ KREA_SYSTEM_PROMPT = """你是英文图像提示词（prompt）工程师，服�
 5. 不要写画面里没有的内容；不要写对白、心理活动、时间流逝、前因后果。
 6. 可以用摄影/电影语言：close-up, wide shot, 35mm lens, shallow depth of field,
    soft rim light, volumetric fog, muted color palette…（按画面需要挑用）。
-7. 负向提示词用英文短语，6~12 项、逗号分隔，例如 blurry, low quality, extra fingers,
-   watermark, text, deformed hands。
+7. Krea 2 不用负向提示词，不要输出 negative 字段。
 8. 只输出一个 JSON 对象，不要解释、不要 Markdown 代码块：
-{"prompt": "英文自然语言提示词", "negative": "英文负向提示词", "notes": "一句话说明取舍（中文）"}
+{"prompt": "英文自然语言提示词", "notes": "一句话说明取舍（中文）"}
 """
 
 KREA_TOOLS = [
@@ -256,15 +255,14 @@ KREA_AGENT_EXTRA = """
 """
 
 KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模型）的审核员。用户会给你：
-① 一段中文画面描述；② 目前生成的英文提示词；③ 负向提示词；④ 长度统计。
+① 一段中文画面描述；② 目前生成的英文提示词；③ 长度统计。
 
 请严格审核，并只输出一个 JSON（不要解释、不要代码块）：
 {
   "score": 0-100 的整数（要素覆盖度、英文自然度、画面可画性、长度是否合适）,
   "problems": ["具体问题，最多 5 条，没有就空数组"],
   "missing": ["中文描述里有、但提示词没体现的要素，最多 5 条"],
-  "prompt": "修正后的英文提示词（一整段自然语言）",
-  "negative": "修正后的英文负向提示词（逗号分隔）"
+  "prompt": "修正后的英文提示词（一整段自然语言）"
 }
 
 审核要点：
@@ -272,7 +270,7 @@ KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模
 - 是不是写成了 tag 堆砌、下划线、或者带权重的写法（这是错的，必须改成句子）
 - 是否夹带了画面里没有的内容、对白、心理活动
 - 长度是否在 60~120 个英文单词之间；太笼统就补细节，太啰嗦就删重复
-如果你认为已经足够好，可以把 prompt/negative 原样返回，并给出高分。
+如果你认为已经足够好，可以把 prompt 原样返回，并给出高分。
 """
 
 # 用户可在界面上选择的"额外要求"，会被拼进 prompt
@@ -1288,8 +1286,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         say("整理英文提示词：%d 词" % stats["words"], 64.8)
         out = {
             "mode": "natural", "model": prof["key"], "raw": content,
-            "prompt": fields["prompt"], "negative": fields["negative"],
-            "negative_prompt": fields["negative"], "notes": fields["notes"],
+            "prompt": fields["prompt"], "notes": fields["notes"],
             "trace": trace, "stats": stats, "tools_used": tools_ok, "review": None,
         }
         if reflect:
@@ -1446,10 +1443,9 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
         say("自省第 %d/%d 轮：审核员评分中…" % (i, rounds),
             66.0 + (i - 1) * 28.0 / rounds)
         cur = result.get("prompt") or ""
-        neg = result.get("negative") or ""
-        ask = ("【中文描述】\n%s\n\n【当前英文提示词】\n%s\n\n【当前负向提示词】\n%s\n\n"
+        ask = ("【中文描述】\n%s\n\n【当前英文提示词】\n%s\n\n"
                "【长度】%d 个英文单词\n\n请审核并输出 JSON。"
-               % (text, cur, neg or "（空）", word_count(cur)))
+               % (text, cur, word_count(cur)))
         body = _post_chat(cfg, {
             "model": model,
             "messages": [{"role": "system", "content": KREA_CRITIC_SYSTEM},
@@ -1473,17 +1469,9 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
         except Exception:
             score = None
         new_prompt = _clean_prompt(crit.get("prompt") or crit.get("positive") or "")
-        new_neg = crit.get("negative")
-        if isinstance(new_neg, list):
-            new_neg = ", ".join(str(x) for x in new_neg if str(x).strip())
-        new_neg = _clean_prompt(new_neg or "")
         changed = 0
         if new_prompt and new_prompt != cur:
             result["prompt"] = new_prompt
-            changed += 1
-        if new_neg and new_neg != neg:
-            result["negative"] = new_neg
-            result["negative_prompt"] = new_neg
             changed += 1
         history.append({"round": i, "score": score,
                         "problems": (crit.get("problems") or [])[:5],
@@ -1687,8 +1675,10 @@ def comfy_inspect(workflow, pos_id=None, neg_id=None):
         for nid, _cls, _t, looks_neg in nodes:
             if looks_neg == want_neg:
                 return nid, False
-        # 兜底：正向取第一个，负向取第二个
-        return (nodes[1][0] if (want_neg and len(nodes) > 1) else nodes[0][0]), False
+        if want_neg:
+            # 只有一个文本节点（Krea 2 常见）：没有负向节点，就别拿正向节点顶替
+            return (nodes[1][0] if len(nodes) > 1 else ""), False
+        return nodes[0][0], False
 
     pos_node, pos_manual = pick(pos_id, False)
     neg_node, neg_manual = pick(neg_id, True)
@@ -1723,12 +1713,17 @@ def comfy_send(url, workflow, positive, negative, pos_id=None, neg_id=None):
     pos_node = info["positive_node"]
     neg_node = info["negative_node"]
 
-    for nid, text in ((pos_node, positive), (neg_node, negative)):
-        node = workflow.get(nid)
-        if not isinstance(node, dict):
-            raise RuntimeError("节点 %s 不存在于工作流里" % nid)
-        node.setdefault("inputs", {})
-        node["inputs"]["text"] = text or ""
+    pos = workflow.get(pos_node)
+    if not isinstance(pos, dict):
+        raise RuntimeError("节点 %s 不存在于工作流里" % pos_node)
+    pos.setdefault("inputs", {})
+    pos["inputs"]["text"] = positive or ""
+    # 没有负向节点（例如 Krea 2 的单词条工作流）时只写正向，绝不覆盖正向节点
+    if neg_node and neg_node != pos_node:
+        neg = workflow.get(neg_node)
+        if isinstance(neg, dict):
+            neg.setdefault("inputs", {})
+            neg["inputs"]["text"] = negative or ""
 
     body = _post_json(url + "/prompt",
                       {"prompt": workflow, "client_id": "tagcraft"}, timeout=30)
@@ -1956,8 +1951,6 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "natural",
                     "raw": content,
                     "prompt": fields["prompt"],
-                    "negative": fields["negative"],
-                    "negative_prompt": fields["negative"],
                     "notes": fields["notes"],
                     "stats": {"llm_calls": 1, "tool_calls": 0,
                               "words": word_count(fields["prompt"]),
@@ -2000,17 +1993,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "不认识的模型：%s" % pm})
             if get_model(pm)["mode"] == "natural":
                 raw_prompt = body.get("prompt") or body.get("positive") or ""
-                raw_neg = body.get("negative") or ""
                 if isinstance(raw_prompt, list):
                     raw_prompt = " ".join(str(x) for x in raw_prompt if str(x).strip())
-                if isinstance(raw_neg, list):
-                    raw_neg = ", ".join(str(x) for x in raw_neg if str(x).strip())
                 prompt = _clean_prompt(raw_prompt)
-                negative = _clean_prompt(raw_neg)
                 if not prompt:
                     return self._send(400, {"error": "没有可评审的提示词"})
-                result = {"mode": "natural", "prompt": prompt, "negative": negative,
-                          "negative_prompt": negative,
+                result = {"mode": "natural", "prompt": prompt,
                           "stats": {"llm_calls": 0, "tool_calls": 0,
                                     "words": word_count(prompt)}}
                 try:
@@ -2024,8 +2012,7 @@ class Handler(BaseHTTPRequestHandler):
                     if review.get("final_score") is not None else ""))
                 return self._send(200, {
                     "mode": "natural", "review": review,
-                    "prompt": result["prompt"], "negative": result["negative"],
-                    "negative_prompt": result["negative"],
+                    "prompt": result["prompt"],
                     "stats": {"llm_calls": result["stats"]["llm_calls"],
                               "tool_calls": 0,
                               "words": word_count(result["prompt"]),
