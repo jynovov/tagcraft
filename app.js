@@ -558,6 +558,7 @@ async function generate() {
     max_rounds: st.agentRounds ? +st.agentRounds : 6,
     reflect: st.reflect !== false,
     reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
+    system_prompt: localStorage.getItem(LS_PROMPT) || '',
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;

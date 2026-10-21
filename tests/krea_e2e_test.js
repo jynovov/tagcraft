@@ -110,13 +110,15 @@ function waitUp(port, ms = 25000) {
     }
 
     console.log('== A. 生成 → 进度 → 填回界面');
+    const KREA_MARK = 'ZZZ_E2E_KREA_PROMPT';
     store['tagcraft.settings'] = JSON.stringify({
       apiBase: API.api_base, apiKey: API.api_key, model: API.model,
       temperature: 0.6, agentRounds: 4, reflect: true, reflectRounds: 2
     });
+    store['tagcraft.prompt.krea'] =
+      '你是 Krea 2 的英文提示词工程师，只输出 JSON。' + KREA_MARK;
     el('inputText').value = '黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头';
     el('useAgent').checked = true;
-    el('useReflect').checked = true;
 
     vm.runInContext('generate()', ctx);
     const widths = [];
@@ -154,6 +156,13 @@ function waitUp(port, ms = 25000) {
     check('运行过程中没有脚本报错',
           !toasts.some(t => /is not defined|undefined is not|is not a function/.test(t)),
           JSON.stringify(toasts));
+    let dumpOk = false;
+    try {
+      const calls = JSON.parse(fs.readFileSync(dump, 'utf8'));
+      dumpOk = calls.some(c => (c.messages || []).some(
+        m => m.role === 'system' && (m.content || '').indexOf(KREA_MARK) >= 0));
+    } catch (e) { /* ignore */ }
+    check('设置页的自定义 Krea2 提示词真的随请求发出', dumpOk);
 
     console.log('== B. 历史记录');
     const his = JSON.parse(vm.runInContext('JSON.stringify(loadHistory().slice(0,1))', ctx));

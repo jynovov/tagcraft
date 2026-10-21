@@ -38,12 +38,10 @@
           <textarea id="inputText" rows="11"
             placeholder="用中文描述你想画的画面，可以写很长，情绪和氛围也写上（Ctrl+Enter 生成）"></textarea>
           <div class="row">
-            <label class="inline check" title="让模型自己查术语，再自我评审重写">
+            <label class="inline check" title="让模型自己查中英术语对照，再写提示词">
               <input id="useAgent" type="checkbox" checked> Agent 模式
             </label>
-            <label class="inline check" title="生成后让审核员打分并按需重写">
-              <input id="useReflect" type="checkbox" checked> 生成后自省
-            </label>
+            <span class="page-sub">自省在「设置」页统一开关</span>
           </div>
           <div class="row">
             <button id="btnGenerate" class="primary wide">生成提示词</button>
@@ -51,6 +49,7 @@
           </div>
           <div class="hint-line">
             输出 <b>英文自然语言</b>：一整段顺滑的描述，不用下划线 tag、不用权重语法。
+            <br><b>Agent 模式</b> = 模型先查术语再写；<b>自省</b> = 写完让审核员打分重写（设置页开关）。
             <br>画面要素 → 场景 → 光线 → 镜头 → 风格 → 氛围，Krea 2 更吃这套。
           </div>
         </div>

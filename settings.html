@@ -72,13 +72,27 @@
 
       <div class="card">
         <div class="card-title">
-          系统提示词
+          系统提示词 · NoobAI 系（Danbooru tag）
           <span class="spacer"></span>
           <button id="btnResetPrompt" class="small ghost">恢复默认</button>
         </div>
-        <textarea id="systemPrompt" rows="14" class="mono"></textarea>
+        <textarea id="systemPrompt" rows="12" class="mono"></textarea>
         <div class="row">
           <button id="btnSavePrompt" class="primary">保存提示词</button>
+          <span class="page-sub">改完随生成请求发给模型；清空则用内置模板</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          系统提示词 · Krea 2（英文自然语言）
+          <span class="spacer"></span>
+          <button id="btnResetPromptKrea" class="small ghost">恢复默认</button>
+        </div>
+        <textarea id="systemPromptKrea" rows="12" class="mono"></textarea>
+        <div class="row">
+          <button id="btnSavePromptKrea" class="primary">保存提示词</button>
+          <span class="page-sub">只对 Krea2 页生效；要求输出英文自然语言，不写 tag</span>
         </div>
       </div>
 

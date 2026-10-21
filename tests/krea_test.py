@@ -212,6 +212,35 @@ def main():
         else:
             check("关掉工具与自省也能出提示词", False, b[:200])
 
+        print("== 自定义系统提示词（设置页里改的那份）")
+        krea_mark = "ZZZ_CUSTOM_KREA_PROMPT"
+        tag_mark = "ZZZ_CUSTOM_TAG_PROMPT"
+        custom_krea = ("你是 Krea 2 的英文提示词工程师，只输出 JSON。%s。"
+                       % krea_mark)
+        st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
+                                          "use_tools": False, "reflect": False,
+                                          "system_prompt": custom_krea, "api": api})
+        check("自定义 Krea2 提示词可用", st == 200 and bool(json.loads(b).get("prompt")),
+              b[:160])
+        custom_tag = ("你是 tag 工程师，只输出 JSON。%s。" % tag_mark)
+        st, b = post(base, "/api/agent", {"text": text, "use_tools": False,
+                                          "reflect": False, "system_prompt": custom_tag,
+                                          "api": api})
+        check("自定义 tag 提示词可用", st == 200 and bool(json.loads(b).get("positive")),
+              b[:160])
+        with open(DUMP, encoding="utf-8") as f:
+            calls = json.load(f)
+        sys_texts = [m.get("content") or "" for c in calls for m in (c.get("messages") or [])
+                     if m.get("role") == "system"]
+        krea_sys = [s for s in sys_texts if krea_mark in s]
+        tag_sys = [s for s in sys_texts if tag_mark in s]
+        check("自定义 Krea2 提示词真的发给了模型", bool(krea_sys))
+        check("自定义后不再叠加内置 Krea2 模板",
+              bool(krea_sys) and all("长度控制在 60~120" not in s for s in krea_sys))
+        check("自定义 tag 提示词真的发给了模型", bool(tag_sys))
+        check("自定义后不再叠加内置 tag 模板",
+              bool(tag_sys) and all("Danbooru 上真实存在的 tag" not in s for s in tag_sys))
+
         print("== 后台任务（krea 进度条走同一条路）")
         st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
                                           "max_rounds": 4, "reflect": False,

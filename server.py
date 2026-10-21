@@ -849,11 +849,13 @@ def ping_llm(cfg):
 
 
 def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
-             prompt_model=DEFAULT_MODEL):
+             prompt_model=DEFAULT_MODEL, system_prompt=""):
     model = (cfg.get("model") or "").strip()
     prof = get_model(prompt_model)
     natural = prof["mode"] == "natural"
-    system = KREA_SYSTEM_PROMPT if natural else SYSTEM_PROMPT
+    # 设置页里改过的系统提示词优先；留空则用内置的模型档案
+    system = (system_prompt or "").strip() or (
+        KREA_SYSTEM_PROMPT if natural else SYSTEM_PROMPT)
     if extra_rules:
         system += "\n补充要求：" + extra_rules + "\n"
     if max_tags and not natural:
@@ -1107,7 +1109,7 @@ def prompt_style_warnings(prompt):
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                    max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
-                   progress=None, prompt_model=DEFAULT_MODEL):
+                   progress=None, prompt_model=DEFAULT_MODEL, system_prompt=""):
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
@@ -1128,13 +1130,15 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     prof = get_model(prompt_model)
     natural = prof["mode"] == "natural"
     tools_ok = bool(use_tools)
+    base_prompt = (system_prompt or "").strip() or (
+        KREA_SYSTEM_PROMPT if natural else SYSTEM_PROMPT)
     if natural:
-        system = KREA_SYSTEM_PROMPT
+        system = base_prompt
         if tools_ok:
             system += KREA_AGENT_EXTRA
         system += "\n本次英文提示词长度：60~120 个英文单词。\n"
     else:
-        system = SYSTEM_PROMPT + AGENT_EXTRA
+        system = base_prompt + AGENT_EXTRA
         if max_tags:
             system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
     if extra_rules:
@@ -1935,6 +1939,7 @@ class Handler(BaseHTTPRequestHandler):
                     max_tags=int(body.get("max_tags") or 45),
                     temperature=float(body.get("temperature") or 0.6),
                     prompt_model=pm,
+                    system_prompt=(body.get("system_prompt") or ""),
                 )
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
@@ -2077,6 +2082,7 @@ class Handler(BaseHTTPRequestHandler):
                 reflect_rounds=int(body.get("reflect_rounds") or 2),
                 use_tools=bool(body.get("use_tools", True)),
                 prompt_model=pm,
+                system_prompt=(body.get("system_prompt") or ""),
             )
 
             def report(res):

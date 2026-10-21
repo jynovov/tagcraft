@@ -150,6 +150,9 @@ def main():
                            ("/settings.html", "系统提示词")]:
             st, body = get(path)
             check("GET " + path, st == 200 and must in body, "HTTP %s" % st)
+        st, body = get("/settings.html")
+        check("设置页有 Krea2 提示词入口", st == 200 and "systemPromptKrea" in body,
+              "HTTP %s" % st)
 
         say("静态资源：")
         for path in ("/style.css", "/common.js", "/app.js", "/krea.js", "/settings.js",

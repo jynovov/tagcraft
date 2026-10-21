@@ -42,7 +42,6 @@ function draftPayload() {
   return {
     text: $('inputText').value,
     agent: $('useAgent').checked,
-    reflect: $('useReflect').checked,
     prompt: state.prompt,
     negative: state.negative,
     notes: state.notes,
@@ -56,7 +55,7 @@ function emptyDraft(name) {
   return {
     id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     name: name || '新草稿', time: Date.now(),
-    text: '', agent: true, reflect: true,
+    text: '', agent: true,
     prompt: '', negative: '', notes: '', trace: [], review: null, stats: null
   };
 }
@@ -77,7 +76,6 @@ function restoreWork() {
   if (!d) return false;
   $('inputText').value = d.text || '';
   $('useAgent').checked = d.agent !== false;
-  $('useReflect').checked = d.reflect !== false;
   state.prompt = d.prompt || '';
   state.negative = d.negative || '';
   state.notes = d.notes || '';
@@ -314,9 +312,9 @@ async function generate() {
   const text = $('inputText').value.trim();
   if (!text) { toast('先写点描述', true); return; }
   const agent = $('useAgent').checked;
-  const reflect = $('useReflect').checked;
   const btn = $('btnGenerate');
   const st = loadSettings();
+  const reflect = st.reflect !== false;   // 自省统一由「设置」页开关控制
   const body = {
     text,
     prompt_model: 'krea',
@@ -324,6 +322,7 @@ async function generate() {
     max_rounds: st.agentRounds ? +st.agentRounds : 6,
     reflect,
     reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
+    system_prompt: localStorage.getItem(LS_PROMPT_KREA) || '',
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;
@@ -678,7 +677,7 @@ async function loadStatus() {
 }
 
 function init() {
-  renderSidebar('krea');
+  renderSidebar('gen');
   renderModelSwitch('krea');
   loadStatus();
 

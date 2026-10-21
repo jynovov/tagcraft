@@ -3,13 +3,22 @@
 
 const $ = (id) => document.getElementById(id);
 let defaultPrompt = '';
+let defaultKreaPrompt = '';
 let saveTimer = null;
+
+/** 只存「和内置模板不一样」的提示词；一样就删掉键，升级后能自动吃新默认 */
+function savePrompt(key, value, def) {
+  const v = String(value || '');
+  if (v.trim() && v !== def) localStorage.setItem(key, v);
+  else localStorage.removeItem(key);
+}
 
 /** 把当前表单写进本地存储（同时保留其它页写入的设置，例如生成页的 tag 上限） */
 function persist() {
   const old = loadSettings();
   saveSettings(Object.assign({}, old, collect()));
-  localStorage.setItem(LS_PROMPT, $('systemPrompt').value);
+  savePrompt(LS_PROMPT, $('systemPrompt').value, defaultPrompt);
+  savePrompt(LS_PROMPT_KREA, $('systemPromptKrea').value, defaultKreaPrompt);
   const hint = $('saveHint');
   if (hint) {
     hint.textContent = '已自动保存 · ' + new Date().toLocaleTimeString();
@@ -26,6 +35,7 @@ function queueSave() {
 async function loadStatus() {
   const st = await api('/api/status');
   defaultPrompt = st.system_prompt || '';
+  defaultKreaPrompt = st.krea_system_prompt || '';
   const d = st.dict || {};
   $('dictStatus').textContent = '词表 ' + (d.count || 0).toLocaleString() + ' 条';
   $('dictInfo').textContent =
@@ -39,6 +49,8 @@ async function loadStatus() {
   }
   const saved = localStorage.getItem(LS_PROMPT);
   $('systemPrompt').value = saved || defaultPrompt;
+  const savedKrea = localStorage.getItem(LS_PROMPT_KREA);
+  $('systemPromptKrea').value = savedKrea || defaultKreaPrompt;
 }
 
 function fill() {
@@ -71,7 +83,7 @@ function init() {
 
   // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）
   ['apiBase', 'model', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',
-   'reflect', 'systemPrompt'].forEach(id => {
+   'reflect', 'systemPrompt', 'systemPromptKrea'].forEach(id => {
     const el = $(id);
     el.addEventListener('input', queueSave);
     el.addEventListener('change', queueSave);
@@ -87,10 +99,21 @@ function init() {
     toast('提示词已保存');
   });
 
+  $('btnSavePromptKrea').addEventListener('click', () => {
+    persist();
+    toast('Krea2 提示词已保存');
+  });
+
   $('btnResetPrompt').addEventListener('click', () => {
     $('systemPrompt').value = defaultPrompt;
     localStorage.removeItem(LS_PROMPT);
     toast('已恢复默认提示词');
+  });
+
+  $('btnResetPromptKrea').addEventListener('click', () => {
+    $('systemPromptKrea').value = defaultKreaPrompt;
+    localStorage.removeItem(LS_PROMPT_KREA);
+    toast('Krea2 提示词已恢复默认');
   });
 
   $('btnTest').addEventListener('click', async () => {

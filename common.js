@@ -21,13 +21,13 @@ const NEG_ANATOMY = ['extra_arms', 'extra_legs', 'extra_digits', 'fewer_digits',
 
 const LS_SETTINGS = 'tagcraft.settings';
 const LS_HISTORY = 'tagcraft.history';
-const LS_PROMPT = 'tagcraft.prompt';
+const LS_PROMPT = 'tagcraft.prompt';            // NoobAI 系的系统提示词
+const LS_PROMPT_KREA = 'tagcraft.prompt.krea';  // Krea 2 的系统提示词
 const LS_FAVS = 'tagcraft.favs';
 const LS_COMFY = 'tagcraft.comfy';
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
-  krea: '<path d="M11 3.2l1.6 4.2 4.2 1.6-4.2 1.6L11 14.8 9.4 10.6 5.2 9l4.2-1.6z"/><path d="M18 14.6l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/>',
   fav: '<path d="M12 3.4l2.7 5.4 6 .9-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.7l6-.9z"/>',
   his: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.1 2"/>',
   comfy: '<rect x="3.2" y="4.8" width="17.6" height="14.4" rx="2.2"/><circle cx="8.6" cy="10" r="1.6"/><path d="M4 17.2l5-4.6 3.4 3 3-2.6 4.6 4.2"/>',
@@ -35,11 +35,10 @@ const ICONS = {
   off: '<path d="M12 4v7.2"/><path d="M7.6 6.7a7 7 0 109.1.2"/>'
 };
 
-/** 渲染侧边栏；active: 'gen' | 'krea' | 'fav' | 'his' | 'comfy' | 'set' */
+/** 渲染侧边栏；active: 'gen' | 'fav' | 'his' | 'comfy' | 'set' */
 function renderSidebar(active) {
   const items = [
     { k: 'gen', href: '/', label: '生成' },
-    { k: 'krea', href: '/krea.html', label: 'Krea2' },
     { k: 'fav', href: '/favorites.html', label: '收藏' },
     { k: 'his', href: '/history.html', label: '历史' },
     { k: 'comfy', href: '/comfy.html', label: 'ComfyUI' },
