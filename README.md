@@ -3,9 +3,10 @@
 <p align="center"><img src="assets/tagcraft_256.png" width="120" alt="TagCraft"></p>
 
 > 把一段中文长描述转成 **SDXL 动漫模型（NoobAI-XL / Illustrious 系）能认的英文 Danbooru tag**，并逐条用本地词表校验。
+> 同一个输入，也能切换成 **Krea 2** 的英文自然语言提示词（一整段顺滑的英文描写，不下划线、不堆 tag）。
 > 全程本地运行，只用 Python 标准库；大模型接口可自选（DeepSeek / 智谱 / 硅基流动 / 本地 Ollama…）。
 
-Turn a long Chinese description into Danbooru-style English tags for SDXL anime models, with local tag-dictionary validation. Runs entirely on your machine, standard library only.
+Turn a long Chinese description into Danbooru-style English tags for SDXL anime models, or into natural-language English prompts for Krea 2. Local tag-dictionary validation, standard library only.
 
 ---
 
@@ -26,21 +27,22 @@ TagCraft 做三件事：
 ## 功能
 
 - **中文长文本 → tag**，让模型输出严格 JSON（正向 / 负向 / 取舍说明），解析容错
+- **双模型切换**：生成页顶部可在 **NoobAI 系（Danbooru tag）** 和 **Krea 2（英文自然语言）** 之间切换，各自一个独立页面，草稿箱也各自独立
 - **智能体模式**：模型自己决定调用词表工具（搜索/精确查/批量校验/候选）查证写法，最多 6 轮；随后自省评审打分并按需重写，界面显示完整的工具调用轨迹与评分
 - **进度条 + 实时状态**：智能体在后台任务里跑，界面显示进度条（按阶段与轮数估算百分比）、当前在做什么、已用时间；跑完变绿并停留几秒。中途切页或刷新回来会**自动接上进度**，不会两眼一抹黑
 - **设置即改即存**：设置页的任何改动自动保存（防抖 400ms），不用记得点「保存」；接口报错会自动重试，错误信息说人话
 - **词表校验**：查不到的只显示小红框，点一下弹候选替换；`masterpiece`、`best_quality` 这类模型美学词走白名单放行（它们并不是 Danbooru tag）
-- **一键发送到 ComfyUI**：配好 API 格式工作流后，点一下就把正/负提示词写进 `CLIPTextEncode` 并排队出图，不用再复制粘贴
+- **一键发送到 ComfyUI**：配好 API 格式工作流后，点一下就把正/负提示词写进文本编码节点并排队出图（Krea 2 工作流同样复用）
+- **按钮动效**：悬浮抬起、按下回弹、点击波纹、主按钮扫光、运行中呼吸；系统开了「减少动态效果」会自动收敛成静态
 - **一键预设**：`+ 标准质量词`、`+ 基础负向`、`+ 防崩负向`（一批核对过的解剖类 tag，专治高分辨率下手脚崩坏）
-- **收藏整套画面**：把「中文描述 + 质量词 + 正向 + 负向」一起存进收藏页，下次一键载入复现，不用重新生成
-- **草稿箱**：可以同时留多份方案（各自独立的描述 + tag + 轨迹 + 评分），顶部下拉随时切换、复制、改名；任何改动自动保存，切到别的页面再回来也不会丢
-- **五页侧边栏界面**：生成 / 收藏 / 历史 / ComfyUI / 设置；历史与收藏都能一键载回生成页
+- **收藏整套画面**：把「中文描述 + 质量词 + 正向 + 负向」一起存进收藏页，下次一键载入复现，不用重新生成；Krea 2 记录也混在同一个收藏页里，自动区分
+- **草稿箱**：可以同时留多份方案（各自独立的描述 + 结果 + 轨迹 + 评分），顶部下拉随时切换、复制、改名；任何改动自动保存，切到别的页面再回来也不会丢
+- **六页侧边栏界面**：生成 / Krea2 / 收藏 / 历史 / ComfyUI / 设置；历史与收藏都能一键载回对应生成页
 - **暖色主题**：默认暖米色调，界面柔和；主要操作按钮用橙色强调
 - **质量词单独一组**，与正向 tag 分开管理、分开复制
 - **tag 卡片可交互**：点击循环权重（1.0→1.1→1.2→1.3→1.5）、拖动排序、一键去重、按标准顺序整理
 - **中文 / 英文 / 别名搜索**：输 `过膝袜` 出 `thighhighs`，输 `v_sign` 出 `v`
 - **工具调用可见**：结果区显示「大模型 N 次 · 词表工具校验 X 个 tag · 其中 Y 个不存在 · 耗时 Z 秒」
-- **五页侧边栏界面**：生成 / 收藏 / 历史 / ComfyUI / 设置；历史与收藏都能一键载回生成页
 - **无窗口启动**：双击 exe 后台静默运行，界面里点「退出」即停
 - 纯 Python 标准库，零依赖；词表本地缓存成 SQLite，查询毫秒级；`Ctrl+Enter` 直接生成
 
@@ -49,9 +51,10 @@ TagCraft 做三件事：
 1. 在 ComfyUI 里搭好工作流（Checkpoint → CLIPTextEncode ×2 → KSampler → VAE Decode → SaveImage）
 2. 菜单 **工作流 → 导出（API）**，得到一个 JSON
 3. 打开 TagCraft 左侧的 **ComfyUI** 页 → 粘贴 JSON、填地址（默认 `http://127.0.0.1:8188`）→ 先点「识别节点」确认正负节点，再点「测试连接」
-4. 回到「生成」页，生成 tag 后点 **发送到 ComfyUI** —— 正向写进一个文本节点、负向写进另一个，然后自动排队
+4. 回到「生成」页（或 **Krea2** 页），生成后点 **发送到 ComfyUI** —— 正向写进一个文本节点、负向写进另一个，然后自动排队
 
 节点是**自动识别**的（按节点里原有的提示词判断哪个是负向），也可以在 ComfyUI 页手动指定节点 id。发送成功后结果区会显示写进了哪两个节点以及 `prompt_id`。
+Krea 2 的工作流同样适用：文本节点类名里只要带 `TextEncode` 就能被识别，英文提示词会原样写进去。
 
 ## 智能体模式（工具调用 + 自省）
 
@@ -89,6 +92,24 @@ TagCraft 做三件事：
 参数在「设置 → 智能体」里调：工具调用最大轮数（默认 6）、自省轮数（默认 2，填 0 关闭）。
 如果所用接口不支持 `tools`（部分本地模型），会自动降级成单次生成并在轨迹里标注「降级」，不会卡住。
 
+## Krea 2 模式（英文自然语言）
+
+生成页顶部的分段开关可以切到 **Krea 2**：描述还是中文，但输出换成**一整段英文自然语言提示词**。
+
+| | NoobAI 系 | Krea 2 |
+|---|---|---|
+| 输出 | 逗号分隔的 Danbooru tag | 一段顺滑的英文句子 |
+| 写法 | 全小写 + 下划线（`thighhighs`） | 自然语言（`over-the-knee socks`） |
+| 校验 | 33 万词表逐条校验 | 不做 tag 校验，改为词数统计 + 风格体检 |
+| 工具 | 搜索 / 精确查 / 批量校验 / 候选 | 只有 `lookup_term`（中英术语对照） |
+| 自省 | 按 tag 规范打分重写 | 按「英文自然度 + 画面覆盖度 + 长度」打分重写 |
+
+Krea 2 的提示词顺序建议是：**主体 → 场景 → 光线 → 镜头 → 风格 → 氛围**；长度控制在 60~120 个英文单词。
+页面右边还会顺手体检：如果模型又写回 `xxx_yyy` 这种 tag 风格，会提示你改掉（不阻断结果）。
+
+Krea2 页有独立的草稿箱（键名 `tagcraft.krea.*`），收藏 / 历史与 tag 页共用一个列表，靠 `kind` 字段区分，
+点「载入」会自动回到对应的页面。ComfyUI 工作流只需配一次，两页共用。
+
 ## 快速开始
 
 要求：**Python 3.10+**（不需要 pip 安装任何东西）。
@@ -121,13 +142,14 @@ python server.py
 
 ## 界面
 
-左侧竖排图标栏切换五个页面：
+左侧竖排图标栏切换六个页面：
 
 | 页面 | 内容 |
 |---|---|
 | **生成** | 中文输入（Ctrl+Enter 生成）→ 查词 → 结果分四组（质量词 / 正向 tag / 未识别 / 负向 tag），自动去重与排序，带一键预设；工具轨迹与自省评审折叠显示 → 三路输出、复制、**发送到 ComfyUI** |
-| **收藏** | 存下来的「描述 + 整套 tag」，可载入生成页 / 复制正向 / 复制负向 / 删除 |
-| **历史** | 最近 10 条记录，可载入生成页 / 复制正向 / 删除 / 清空 |
+| **Krea2** | 中文描述 → 英文自然语言提示词，词数统计与写法体检；术语对照小工具；草稿箱、进度条、自省、收藏、发送到 ComfyUI 与生成页一致 |
+| **收藏** | 存下来的「描述 + 整套 tag」或「描述 + 英文提示词」，可载入对应页面 / 复制 / 改名 / 删除 |
+| **历史** | 最近 10 条记录（两种模型混排，带标记），可载入对应页面 / 复制 / 删除 / 清空 |
 | **ComfyUI** | 地址、API 格式工作流、正/负节点 id、识别节点、测试连接 |
 | **设置** | 大模型（地址、模型名、API Key、温度、测试连接）、**智能体（工具轮数 / 自省轮数 / 开关）**、系统提示词（可改可恢复）、词表源与更新 |
 
@@ -135,7 +157,7 @@ python server.py
 
 ```
 ┌──────────────── 浏览器  http://127.0.0.1:8848 ────────────────┐
-│ index / favorites / history / comfy / settings（原生 JS）      │
+│ index / krea / favorites / history / comfy / settings（原生 JS）  │
 └───────────▲──────────────────────────────┬───────────────────┘
             │ fetch /api/*                 │
 ┌───────────┴──────────────────────────────▼───────────────────┐
@@ -156,7 +178,7 @@ python server.py
 ```
 
 - 词表字段：`name, category, post_count, aliases, cn` → SQLite；额外一列 `blob` 把三者拼起来，一条 LIKE 同时支持中文、英文、别名搜索
-- 大模型：OpenAI 兼容协议，由本地服务代理转发（绕开跨域、Key 可只写在本机 `config.json`）
+- 大模型：OpenAI 兼容协议，由本地服务代理转发（绕开跨域、Key 可只写在本机 `config.json`）；按 `prompt_model` 选择「tag 档案」或「Krea 2 自然语言档案」（系统提示词、工具、自省标准三件套一起换）
 - ComfyUI：服务端读设置里粘贴的 API 格式工作流，把正/负提示词写进 `CLIPTextEncode` 节点的 `inputs.text`，再 POST 到 `/prompt` 排队（节点按原有提示词自动判断正负）
 - 启动器：C# 编译的 exe，图标写进 PE 资源；启动前**逐个实测**候选 Python 是否可用（PATH 里的应用商店别名会被跳过）
 - 图标：小尺寸必须用 BMP 条目写入 ICO，否则资源管理器会显示成白纸（见 `ico_util.py`）
@@ -166,25 +188,29 @@ python server.py
 ```
 tagcraft/
 ├── TagCraft.exe                  Windows 启动器（图标已嵌在 exe 资源里）
-├── server.py                     本地服务（静态页 + 词表 + 大模型代理）
-├── index.html / app.js           生成页
+├── server.py                     本地服务（静态页 + 词表 + 大模型代理 + 两套提示词档案）
+├── index.html / app.js           生成页（NoobAI 系 → Danbooru tag）
+├── krea.html / krea.js           Krea2 页（英文自然语言提示词）
 ├── favorites.html / favorites.js 收藏页
 ├── history.html / history.js     历史页
 ├── comfy.html / comfy.js         ComfyUI 配置页
 ├── settings.html / settings.js   设置页
-├── common.js / style.css         共用脚本与暖色主题
+├── common.js / style.css         共用脚本（侧边栏 / 模型切换 / 按钮动效）与暖色主题
 ├── launcher.cs / build.bat       启动器源码与编译脚本
 ├── start.bat                     命令行启动（备用）
 ├── make_icon_from_image.py       图标生成脚本
 ├── ico_util.py                   手写 ICO 容器
 ├── tests/smoke_test.py           冒烟测试（服务端 + 页面）
 ├── tests/agent_test.py           智能体测试（自带假大模型，免 Key）
+├── tests/krea_test.py            Krea2 模式测试（自然语言链路，免 Key）
 ├── tests/comfy_test.py           ComfyUI 对接测试（自带假 ComfyUI）
-├── tests/mock_llm.py             假大模型（按剧本发工具调用）
+├── tests/mock_llm.py             假大模型（按剧本发工具调用 / 自然语言提示词）
 ├── tests/mock_comfy.py           假 ComfyUI（只实现两个接口）
 ├── tests/ui_test.js              界面逻辑测试（草稿箱，node 直跑）
-├── tests/ui_favorites_test.js    收藏页测试（隐私收起 / 改名）
+├── tests/ui_favorites_test.js    收藏页测试（隐私收起 / 改名 / Krea2 记录）
+├── tests/ui_krea_test.js         Krea2 页逻辑测试（独立草稿箱 / 词数 / 记录互通）
 ├── tests/progress_e2e_test.js    进度条端到端测试（真实服务 + 真实前端逻辑）
+├── tests/krea_e2e_test.js        Krea2 端到端测试（生成 → 进度 → 自省 → 填回界面）
 ├── docs/                         中文文档
 ├── assets/                       图标（含版权说明，见其 README）
 └── data/
@@ -206,7 +232,7 @@ tagcraft/
 python tests/smoke_test.py
 ```
 
-检查五个页面、七个静态资源、目录穿越防护、词表校验、智能体接口与 ComfyUI 接口的错误分支。
+检查六个页面、八个静态资源、目录穿越防护、词表校验、智能体接口与 ComfyUI 接口的错误分支。
 
 也可以只测一个已经在运行的实例（不会关掉它）：
 
@@ -221,6 +247,12 @@ python tests/smoke_test.py
 python tests/agent_test.py
 ```
 
+**Krea2 模式测试**（不需要 API Key：验证自然语言链路 / 术语工具 / 自省改写 / 后台任务 / 参数校验）：
+
+```bat
+python tests/krea_test.py
+```
+
 **ComfyUI 对接测试**（不需要显卡：自带假 ComfyUI，验证节点识别与文本写入）：
 
 ```bat
@@ -233,10 +265,16 @@ python tests/comfy_test.py
 node tests/ui_test.js
 ```
 
-**收藏页测试**（隐私与交互：描述与 tag 默认收起、改名、空状态）：
+**收藏页测试**（隐私与交互：描述与 tag 默认收起、改名、空状态、Krea2 记录）：
 
 ```bat
 node tests/ui_favorites_test.js
+```
+
+**Krea2 页逻辑测试**（独立草稿箱 / 词数统计 / 写法提醒 / 收藏历史互通 / 模型切换器）：
+
+```bat
+node tests/ui_krea_test.js
 ```
 
 **进度条端到端测试**（真实 app.js + 真实服务：验证进度逐步推进、切页期间跑完的结果能取回）：
@@ -245,7 +283,14 @@ node tests/ui_favorites_test.js
 node tests/progress_e2e_test.js
 ```
 
-后三个用极简 DOM 桩把 `common.js` 和页面脚本装进 node 的 `vm` 里跑，不需要浏览器；倒第二个会另外拉起服务与假大模型。
+**Krea2 端到端测试**（真实 krea.js + 真实服务：生成 → 进度 → 自省改写 → 填回界面 → 存历史）：
+
+```bat
+node tests/krea_e2e_test.js
+```
+
+用 node 跑的五个套件都用极简 DOM 桩把 `common.js` 和页面脚本装进 node 的 `vm` 里，不需要浏览器；
+其中 `progress_e2e_test.js` 与 `krea_e2e_test.js` 会另外拉起真实服务与假大模型。
 
 > 会联网的测试都会**自动绕开系统代理**。这一点很重要：Hiddify / Clash 这类客户端开启系统代理后，
 > Python 会把 `127.0.0.1` 的请求也发给代理，导致整片误报 502。服务端访问 ComfyUI 和本地大模型时同样做了直连处理。

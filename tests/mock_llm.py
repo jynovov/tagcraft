@@ -31,6 +31,25 @@ def _is_critic(msgs):
     return False
 
 
+def _is_natural(msgs):
+    """Krea 2 模式：系统提示词里会出现「自然语言提示词」或「Krea 2」。"""
+    for m in msgs or []:
+        if m.get("role") == "system":
+            s = m.get("content") or ""
+            if "Krea 2" in s or "自然语言提示词" in s:
+                return True
+    return False
+
+
+# Krea 2 剧本：第一版故意偏笼统，第二版补上光比与氛围，用来验证自省收敛
+KREA_PROMPT_V1 = ("A girl in a school uniform and over-the-knee socks stands on a beach at dusk, "
+                  "looking back at the camera, warm sunset light, 35mm lens, "
+                  "cinematic anime illustration.")
+KREA_PROMPT_V2 = (KREA_PROMPT_V1 + " Soft rim light outlines her hair, a gentle sea breeze, "
+                  "muted orange and violet sky.")
+KREA_NEG = "blurry, low quality, extra fingers, watermark, text"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -56,6 +75,7 @@ class Handler(BaseHTTPRequestHandler):
         msgs = body.get("messages") or []
         model = str(body.get("model") or "")
         has_tools = bool(body.get("tools"))
+        natural = _is_natural(msgs)
 
         def reply(content, tool_calls=None):
             msg = {"role": "assistant", "content": content}
@@ -84,6 +104,19 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 自省（审核）阶段 ----
         if _is_critic(msgs):
             done = sum(1 for c in CALLS[:-1] if _is_critic(c.get("messages")))
+            if natural:
+                if done == 0:
+                    return reply(json.dumps({
+                        "score": 78,
+                        "problems": ["提示词偏笼统，缺少光比和氛围细节"],
+                        "missing": ["没有体现海风与天色渐变"],
+                        "prompt": KREA_PROMPT_V2,
+                        "negative": KREA_NEG,
+                    }, ensure_ascii=False))
+                return reply(json.dumps({
+                    "score": 95, "problems": [], "missing": [],
+                    "prompt": KREA_PROMPT_V2, "negative": KREA_NEG,
+                }, ensure_ascii=False))
             if done == 0:
                 return reply(json.dumps({
                     "score": 78,
@@ -98,6 +131,19 @@ class Handler(BaseHTTPRequestHandler):
                 "positive": ["masterpiece", "best_quality", "1girl", "solo", "thighhighs",
                              "school_uniform", "sunset", "orange_sky", "looking_back"],
                 "negative": ["worst_quality", "low_quality", "blurry"],
+            }, ensure_ascii=False))
+
+        # ---- Krea 2：英文自然语言生成阶段 ----
+        if natural:
+            tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+            if has_tools and not tool_msgs:
+                return reply("", [{"id": "call_k1", "type": "function", "function": {
+                    "name": "lookup_term",
+                    "arguments": json.dumps({"query": "过膝袜"}, ensure_ascii=False)}}])
+            return reply(json.dumps({
+                "prompt": KREA_PROMPT_V1,
+                "negative": KREA_NEG,
+                "notes": "按 Krea 2 的散文式写法整理，突出黄昏逆光",
             }, ensure_ascii=False))
 
         # ---- 生成阶段 ----

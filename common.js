@@ -27,6 +27,7 @@ const LS_COMFY = 'tagcraft.comfy';
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
+  krea: '<path d="M11 3.2l1.6 4.2 4.2 1.6-4.2 1.6L11 14.8 9.4 10.6 5.2 9l4.2-1.6z"/><path d="M18 14.6l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/>',
   fav: '<path d="M12 3.4l2.7 5.4 6 .9-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.7l6-.9z"/>',
   his: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.1 2"/>',
   comfy: '<rect x="3.2" y="4.8" width="17.6" height="14.4" rx="2.2"/><circle cx="8.6" cy="10" r="1.6"/><path d="M4 17.2l5-4.6 3.4 3 3-2.6 4.6 4.2"/>',
@@ -34,10 +35,11 @@ const ICONS = {
   off: '<path d="M12 4v7.2"/><path d="M7.6 6.7a7 7 0 109.1.2"/>'
 };
 
-/** 渲染侧边栏；active: 'gen' | 'fav' | 'his' | 'comfy' | 'set' */
+/** 渲染侧边栏；active: 'gen' | 'krea' | 'fav' | 'his' | 'comfy' | 'set' */
 function renderSidebar(active) {
   const items = [
     { k: 'gen', href: '/', label: '生成' },
+    { k: 'krea', href: '/krea.html', label: 'Krea2' },
     { k: 'fav', href: '/favorites.html', label: '收藏' },
     { k: 'his', href: '/history.html', label: '历史' },
     { k: 'comfy', href: '/comfy.html', label: 'ComfyUI' },
@@ -58,6 +60,69 @@ function renderSidebar(active) {
   const holder = document.getElementById('sidebar');
   holder.outerHTML = html;
   document.getElementById('btnShutdown').addEventListener('click', shutdown);
+}
+
+/* ---------------------------------------------------------------- 模型切换
+ * 两个模型是完全不同的提示词范式，所以各自一个页面，由一个分段开关来回切。
+ * 与后端 server.py 的 MODELS 保持一致。                                   */
+const PROMPT_MODELS = [
+  { key: 'noob', label: 'NoobAI 系', sub: 'Danbooru tag', href: '/', badge: 'SDXL 动漫' },
+  { key: 'krea', label: 'Krea 2', sub: '英文自然语言', href: '/krea.html', badge: '自然语言' }
+];
+
+function modelInfo(key) {
+  return PROMPT_MODELS.find(m => m.key === key) || PROMPT_MODELS[0];
+}
+
+/** 在 #modelSwitch 里画出切换器；active 是当前页面的模型 key */
+function renderModelSwitch(active) {
+  const host = document.getElementById('modelSwitch');
+  if (!host) return;
+  host.innerHTML = '<div class="mswitch-row">' +
+    '<span class="mswitch-cap">模型</span>' +
+    '<div class="mswitch" role="tablist" aria-label="切换生成模型">' +
+    PROMPT_MODELS.map(m => `
+      <a class="mswitch-item${m.key === active ? ' active' : ''}" href="${m.href}"
+         role="tab" data-model="${m.key}" aria-selected="${m.key === active}">
+        <span class="mswitch-name">${m.label}</span>
+        <span class="mswitch-sub">${m.sub}</span>
+      </a>`).join('') +
+    '</div></div>';
+}
+
+/** 是不是 Krea2 的记录（收藏 / 历史里两种记录混在一起存） */
+function isKreaRecord(item) {
+  return !!item && (item.kind === 'krea' || item.model === 'krea');
+}
+
+/* ---------------------------------------------------------------- 按钮动效
+ * 点击波纹 + 受 CSS 控制的按压/悬浮；纯装饰，动画结束自己删掉节点。
+ * 尊重系统「减少动态效果」设置（CSS 里已处理）。                          */
+function initButtonFx() {
+  if (window.__btnFx) return;
+  window.__btnFx = true;
+  document.addEventListener('pointerdown', function (ev) {
+    const t = ev.target;
+    const b = t && t.closest ? t.closest('button, .mswitch-item') : null;
+    if (!b || b.disabled) return;
+    const rect = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
+    if (!rect) return;
+    const size = Math.max(rect.width, rect.height) * 1.1 || 60;
+    const cx = (typeof ev.clientX === 'number' ? ev.clientX : rect.left + rect.width / 2);
+    const cy = (typeof ev.clientY === 'number' ? ev.clientY : rect.top + rect.height / 2);
+    const rip = document.createElement('span');
+    rip.className = 'ripple';
+    rip.style.width = size + 'px';
+    rip.style.height = size + 'px';
+    rip.style.left = (cx - rect.left - size / 2) + 'px';
+    rip.style.top = (cy - rect.top - size / 2) + 'px';
+    b.appendChild(rip);
+    setTimeout(() => { if (rip.remove) rip.remove(); }, 620);
+  });
+}
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('DOMContentLoaded', initButtonFx);
 }
 
 async function shutdown() {
@@ -127,18 +192,18 @@ function delFav(id) {
   saveFavs(list);
   return list.length;
 }
-/** 用当前这套（描述 + tag）造一条收藏记录 */
-function makeFav(text, quality, pos, neg) {
+/** 用当前这套（描述 + tag / 提示词）造一条收藏记录；extra 可以带 kind 等额外字段 */
+function makeFav(text, quality, pos, neg, extra) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   // 只留一个很短的标签名；完整描述收在折叠区里（考虑隐私，列表页不直接暴露内容）
   const label = clean.length > 12 ? clean.slice(0, 12) + '…' : clean;
-  return {
+  return Object.assign({
     id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title: label || '未命名',
     text: text || '',
     quality: quality || [], pos: pos || [], neg: neg || [],
     time: new Date().toLocaleString()
-  };
+  }, extra || {});
 }
 
 /* ---- ComfyUI 配置 ---- */

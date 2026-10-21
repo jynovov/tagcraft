@@ -57,6 +57,9 @@ a.page-sub:hover{color:var(--accent)}
 .nav svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;
   stroke-linecap:round;stroke-linejoin:round}
 .nav:hover{background:#fff3e5;color:var(--accent2)}
+.nav svg{transition:transform .22s cubic-bezier(.2,.8,.3,1)}
+.nav:hover svg{transform:translateY(-1px) scale(1.07)}
+.nav.active svg{transform:scale(1.05)}
 .nav.active{background:#fff;color:var(--accent2);border-color:var(--line2);box-shadow:var(--shadow)}
 .nav.danger:hover{background:#fdeceb;color:var(--bad)}
 .sidebar .spacer{flex:1}
@@ -105,7 +108,9 @@ input[type=checkbox],input[type=radio]{
   width:16px;height:16px;min-width:16px;padding:0;margin:0;flex:0 0 16px;
   accent-color:var(--accent);cursor:pointer;border-radius:4px
 }
-label.inline{display:inline-flex;align-items:center;gap:7px;margin:0;font-size:12.5px;color:var(--text)}
+label.inline{display:inline-flex;align-items:center;gap:7px;margin:0;font-size:12.5px;color:var(--text);white-space:nowrap}
+/* 数字框在行内标签里不要被 100% 宽撑爆（否则「上限」会竖着断行） */
+label.inline input[type=number]{width:76px;flex:0 0 76px}
 label.check{
   display:inline-flex;align-items:center;gap:7px;padding:6px 12px;margin:0;cursor:pointer;
   background:var(--accent-soft);border:1px solid #f3ddc4;border-radius:999px;
@@ -116,24 +121,92 @@ label.check:hover{border-color:var(--accent);background:#fde5cd}
 /* ---------------- 按钮：更醒目 ---------------- */
 button{
   padding:9px 16px;border:1px solid var(--line2);border-radius:11px;background:#fff;
-  color:#7a6249;font:inherit;font-size:13px;cursor:pointer;transition:.15s;
+  color:#7a6249;font:inherit;font-size:13px;cursor:pointer;
+  position:relative;overflow:hidden;will-change:transform;
+  transition:transform .18s cubic-bezier(.2,.8,.3,1),box-shadow .18s ease,
+             background .18s ease,border-color .18s ease,color .18s ease;
   box-shadow:0 1px 2px rgba(150,100,50,.06)
 }
 button:hover{border-color:var(--accent);color:var(--accent2);transform:translateY(-1px)}
-button:active{transform:translateY(0)}
+button:active{transform:translateY(1px) scale(.985);box-shadow:0 1px 2px rgba(150,100,50,.06)}
+button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(226,128,63,.25),0 1px 2px rgba(150,100,50,.06)}
 button:disabled{opacity:.55;cursor:default;transform:none}
 button.primary{
   background:linear-gradient(180deg,#f0994f,#e2803f);border-color:#d9773a;color:#fff;font-weight:600;
   box-shadow:0 3px 10px rgba(226,128,63,.35)
 }
+/* 主按钮悬浮时一道柔光扫过（纯装饰，不挡点击） */
+button.primary::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.5) 48%,transparent 64%);
+  transform:translateX(-130%);transition:transform .6s ease
+}
+button.primary:hover::after{transform:translateX(130%)}
 button.primary:hover{background:linear-gradient(180deg,#f5a763,#e78a4a);color:#fff;
-  box-shadow:0 5px 14px rgba(226,128,63,.45)}
+  box-shadow:0 6px 16px rgba(226,128,63,.45);transform:translateY(-2px)}
+button.primary:active{transform:translateY(1px) scale(.985)}
+/* 生成中：主按钮轻轻呼吸，表示"还在跑" */
+button.primary:disabled{animation:busyPulse 1.5s ease-in-out infinite}
+@keyframes busyPulse{
+  0%,100%{box-shadow:0 3px 10px rgba(226,128,63,.3)}
+  50%{box-shadow:0 3px 18px rgba(226,128,63,.6)}
+}
 button.ghost{background:#fff8f0;border-color:var(--line);color:#9c7b5c;box-shadow:none}
 button.ghost:hover{background:#fff;color:var(--accent2)}
 button.ghost.danger{color:#b9706a}
 button.ghost.danger:hover{border-color:#e6b3ae;background:#fdf2f1;color:var(--bad)}
 button.small{padding:5px 11px;font-size:12px;border-radius:9px}
 button.wide{flex:1;min-width:120px;padding:11px 18px;font-size:13.5px}
+
+/* 点击波纹（common.js 动态插入 .ripple 后自动移除） */
+.ripple{
+  position:absolute;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(226,128,63,.35),rgba(226,128,63,.12) 55%,transparent 70%);
+  transform:scale(0);animation:rippleOut .58s ease-out forwards
+}
+button.primary .ripple{
+  background:radial-gradient(circle,rgba(255,255,255,.6),rgba(255,255,255,.2) 55%,transparent 70%)
+}
+@keyframes rippleOut{to{transform:scale(1);opacity:0}}
+
+/* ---------------- 模型切换器 ---------------- */
+.model-switch{margin-bottom:16px}
+.mswitch-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mswitch-cap{font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.3px}
+.mswitch{
+  display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);
+  border-radius:999px;background:var(--panel);box-shadow:var(--shadow)
+}
+.mswitch-item{
+  display:flex;flex-direction:column;align-items:flex-start;gap:1px;
+  padding:7px 18px 7px 16px;border-radius:999px;text-decoration:none;
+  color:#9c7b5c;transition:background .22s ease,color .22s ease,transform .22s ease,
+             box-shadow .22s ease;position:relative;overflow:hidden
+}
+.mswitch-item .mswitch-name{font-size:13.5px;font-weight:700;letter-spacing:.2px}
+.mswitch-item .mswitch-sub{font-size:10.5px;opacity:.75}
+.mswitch-item:hover{background:#fff4e5;color:var(--accent2);transform:translateY(-1px)}
+.mswitch-item.active{
+  background:linear-gradient(135deg,#f7a95f,#e2803f);color:#fff;
+  box-shadow:0 3px 12px rgba(226,128,63,.38)
+}
+.mswitch-item.active .mswitch-sub{opacity:.9}
+.mswitch-item.active::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35)
+}
+
+/* ---------------- Krea 2 页面 ---------------- */
+.hint-line{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.6}
+.hint-line b{color:var(--accent2);font-weight:600}
+#outPrompt{font-size:13px;line-height:1.8;min-height:150px}
+.prompt-count{font-size:12px;color:var(--dim)}
+.prompt-count b{color:var(--accent2)}
+.warn-line{
+  background:#fff3e2;border:1px solid #f0d8b8;color:#a3761f;border-radius:10px;
+  padding:7px 11px;font-size:12.5px;margin-bottom:10px;display:none
+}
+.warn-line.show{display:block}
 
 /* ---------------- 草稿箱 ---------------- */
 .draftbar{
@@ -345,3 +418,18 @@ button.wide{flex:1;min-width:120px;padding:11px 18px;font-size:13.5px}
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.bad{background:var(--bad)}
+
+/* ---------------- 动效：系统要求减少动态时全部关掉 ---------------- */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+    scroll-behavior:auto !important
+  }
+  button:hover,button:active,.mswitch-item:hover,.mswitch-item.active,
+  .nav:hover svg,.nav.active svg{transform:none}
+  button.primary::after{display:none}
+  .ripple{display:none}
+}
+

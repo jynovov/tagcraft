@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · Krea2 提示词</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">Krea 2 提示词</h1>
+      <span class="head-right">
+        <span id="kreaStatus" class="pill">英文自然语言</span>
+      </span>
+    </div>
+
+    <div id="modelSwitch" class="model-switch"></div>
+
+    <div class="draftbar">
+      <span class="dlabel">草稿</span>
+      <select id="draftSel" title="切换草稿"></select>
+      <button id="btnNewDraft" class="small" title="新建一份空草稿">＋ 新建</button>
+      <button id="btnCopyDraft" class="small ghost" title="把当前这份复制一份">⧉ 复制</button>
+      <button id="btnRenameDraft" class="small ghost" title="重命名">✎ 改名</button>
+      <button id="btnDelDraft" class="small ghost danger" title="删除这份草稿">删除</button>
+      <span id="draftHint" class="page-sub"></span>
+    </div>
+
+    <div class="layout">
+      <!-- 左：输入 + 术语对照 -->
+      <div class="col">
+        <div class="card">
+          <div class="card-title">描述画面（中文）</div>
+          <textarea id="inputText" rows="11"
+            placeholder="用中文描述你想画的画面，可以写很长，情绪和氛围也写上（Ctrl+Enter 生成）"></textarea>
+          <div class="row">
+            <label class="inline check" title="让模型自己查术语，再自我评审重写">
+              <input id="useAgent" type="checkbox" checked> Agent 模式
+            </label>
+            <label class="inline check" title="生成后让审核员打分并按需重写">
+              <input id="useReflect" type="checkbox" checked> 生成后自省
+            </label>
+          </div>
+          <div class="row">
+            <button id="btnGenerate" class="primary wide">生成提示词</button>
+            <button id="btnClear" class="ghost">清空</button>
+          </div>
+          <div class="hint-line">
+            输出 <b>英文自然语言</b>：一整段顺滑的描述，不用下划线 tag、不用权重语法。
+            <br>画面要素 → 场景 → 光线 → 镜头 → 风格 → 氛围，Krea 2 更吃这套。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">术语对照（中 → 英）</div>
+          <div class="row" style="margin-top:0">
+            <input id="termInput" type="text" placeholder="例如：过膝袜 / 逆光" style="flex:1;min-width:0">
+            <button id="btnTerm">查</button>
+          </div>
+          <div id="termResults" class="list scroll"></div>
+          <div class="hint-line">查到的英文只是术语参考，点一下就能复制，自己再揉进句子里。</div>
+        </div>
+      </div>
+
+      <!-- 右：结果 -->
+      <div class="col">
+        <div class="card">
+          <div class="card-title">
+            结果
+            <span class="spacer"></span>
+            <button id="btnFav" class="small">★ 收藏这套</button>
+          </div>
+          <div id="genStats" class="stats"></div>
+          <div id="progress" class="progress"></div>
+
+          <details id="traceBox" class="fold">
+            <summary id="traceSum">智能体工具调用轨迹</summary>
+            <div id="trace" class="fold-body"></div>
+          </details>
+
+          <details id="reviewBox" class="fold">
+            <summary id="reviewSum">自省评审</summary>
+            <div id="review" class="fold-body"></div>
+          </details>
+
+          <div id="notes" class="notes"></div>
+          <div id="warnLine" class="warn-line"></div>
+
+          <label>英文提示词</label>
+          <textarea id="outPrompt" rows="8" placeholder="生成后会出现在这里，也可以直接手改"></textarea>
+          <div class="row">
+            <span id="promptCount" class="prompt-count">0 词</span>
+            <span class="spacer" style="flex:1"></span>
+            <button id="btnCopyPrompt" class="small primary">复制提示词</button>
+          </div>
+
+          <label style="margin-top:14px">负向提示词</label>
+          <textarea id="outNeg" rows="2" placeholder="blurry, low quality, extra fingers, watermark"></textarea>
+          <div class="row">
+            <button id="btnCopyNeg" class="small">复制负向</button>
+            <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
+          </div>
+          <div class="row">
+            <a href="/comfy.html" class="page-sub">还没配 ComfyUI？去 ComfyUI 页粘贴工作流 →</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Krea 2 的写法要点</div>
+          <ol class="howto">
+            <li><b>写句子，不写 tag</b>：Krea 2 吃的是自然语言描写，逗号堆词和下划线反而更差。</li>
+            <li><b>先主体后环境</b>：谁 / 什么 → 外貌服装 → 动作表情 → 场景 → 光线 → 镜头 → 氛围。</li>
+            <li><b>把情绪翻成画面</b>：「孤独」写成「空荡的站台，远处一盏灯」。</li>
+            <li><b>长度 60~120 词</b>：太短容易空，太长容易自相矛盾。</li>
+            <li><b>负向提示词</b>用英文短语：blurry, low quality, extra fingers, watermark。</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="krea.js"></script>
+</body>
+</html>

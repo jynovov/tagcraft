@@ -951,6 +951,7 @@ function loadRecord(item) {
 
 function init() {
   renderSidebar('gen');
+  renderModelSwitch('noob');
   loadStatus();
 
   const st = loadSettings();
@@ -993,6 +994,11 @@ function init() {
   $('outQuality').addEventListener('input', () => syncFromText('outQuality', 'quality'));
   $('outPos').addEventListener('input', () => syncFromText('outPos', 'positive'));
   $('outNeg').addEventListener('input', () => syncFromText('outNeg', 'negative'));
+
+  // 点模型切换器离开页面前，先把手头的东西落盘（防止最后几秒输入没保存）
+  document.addEventListener('click', e => {
+    if (e.target && e.target.closest && e.target.closest('.mswitch-item')) saveWork();
+  });
 
   // 草稿箱：读草稿 / 迁移旧单草稿 / 选定当前草稿
   initDrafts();

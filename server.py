@@ -141,6 +141,42 @@ QUALITY_TAGS = {
 }
 QUALITY_CN = "质量词（模型用）"
 
+# ---------------------------------------------------------------- 模型档案
+# 两个模型走的是完全不同的提示词范式，所以后端也按「档案」分开：
+#   noob : SDXL 动漫模型（chenkinNoob-xl / NoobAI / Illustrious）→ Danbooru tag
+#   krea : Krea 2 → 英文自然语言散文式提示词（不用下划线 tag、不用权重语法）
+MODELS = {
+    "noob": {
+        "key": "noob",
+        "label": "NoobAI 系",
+        "short": "chenkinNoob-xl-v0.5",
+        "mode": "tags",
+        "badge": "SDXL 动漫",
+        "hint": "Danbooru tag，逐条用 33 万词表校验",
+        "page": "/",
+    },
+    "krea": {
+        "key": "krea",
+        "label": "Krea 2",
+        "short": "Krea 2",
+        "mode": "natural",
+        "badge": "英文自然语言",
+        "hint": "英文自然语言提示词，不做 tag 校验",
+        "page": "/krea.html",
+    },
+}
+DEFAULT_MODEL = "noob"
+
+
+def get_model(key):
+    """按 key 取模型档案；不认识的 key 回落到默认模型。"""
+    return MODELS.get(str(key or "").strip().lower(), MODELS[DEFAULT_MODEL])
+
+
+def is_known_model(key):
+    return str(key or "").strip().lower() in MODELS
+
+
 # ---------------------------------------------------------------- 提示词模板
 
 SYSTEM_PROMPT = """你是 SDXL 动漫模型（NoobAI-XL 系，本机使用 chenkinNoob-xl-v0.5）的提示词工程师。
@@ -163,6 +199,80 @@ SYSTEM_PROMPT = """你是 SDXL 动漫模型（NoobAI-XL 系，本机使用 chenk
 
 只输出一个 JSON 对象，不要任何解释、不要 Markdown 代码块：
 {"positive": ["tag1", "tag2"], "negative": ["tag1"], "notes": "一句话说明你做了什么取舍"}
+"""
+
+# ---------------------------------------------------------------- Krea 2（英文自然语言）
+# Krea 2 认的是「一段顺畅的英文描述」，不是逗号堆起来的 tag；所以这里从系统提示词
+# 到工具、到自省评分，全部换成自然语言范式。工具只保留「中英术语对照」。
+KREA_SYSTEM_PROMPT = """你是英文图像提示词（prompt）工程师，服务对象是 Krea 2（自然语言驱动、偏写实/插画的图像模型）。
+用户会给你一段中文画面描述（可能很长，含情绪、故事、氛围）。你的任务：把它写成一段**英文自然语言提示词**。
+
+硬性规则：
+1. 用完整的英文句子/顺滑的短语描写画面，不要写成 Danbooru tag 列表：
+   不要下划线（不要 long_hair），不要逗号堆词，不要 (word:1.2) 权重语法。
+2. 顺序建议：主体（谁/什么、外貌、服装、表情动作）→ 场景与环境 → 光线 → 镜头与构图
+   → 风格与质感 → 氛围。读起来像一段文字，而不是清单。
+3. 具体、可画：把抽象情绪翻译成看得见的视觉线索（例如「孤独」→「空荡的站台，远处一盏灯」）。
+4. 长度控制在 60~120 个英文单词；一整段，不要分点、不要换行。
+5. 不要写画面里没有的内容；不要写对白、心理活动、时间流逝、前因后果。
+6. 可以用摄影/电影语言：close-up, wide shot, 35mm lens, shallow depth of field,
+   soft rim light, volumetric fog, muted color palette…（按画面需要挑用）。
+7. 负向提示词用英文短语，6~12 项、逗号分隔，例如 blurry, low quality, extra fingers,
+   watermark, text, deformed hands。
+8. 只输出一个 JSON 对象，不要解释、不要 Markdown 代码块：
+{"prompt": "英文自然语言提示词", "negative": "英文负向提示词", "notes": "一句话说明取舍（中文）"}
+"""
+
+KREA_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_term",
+            "description": "查「中文 → 英文」的视觉术语对照（33 万条 Danbooru 词表，带中文名）。"
+                           "拿不准某个服装/发型/动作/场景的英文说法时用它确认；返回的词只是术语参考，"
+                           "最终仍要写成自然语言句子，不要直接堆 tag。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要查的中文或英文关键词，例如「过膝袜」"},
+                    "limit": {"type": "integer", "description": "最多返回几条，默认 6"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+KREA_AGENT_EXTRA = """
+【你可以调用的本地工具】
+  · lookup_term(query) —— 查中英术语对照（33 万条词表，带中文名）
+用法建议：
+  1. 先通读中文描述，把画面要素在脑子里过一遍
+  2. 只有「这个英文怎么说才准」拿不准时才查，最多查 3~4 次
+  3. 查到的英文词是术语参考，最终必须融化进自然语言句子里，不要原样堆 tag
+  4. 确认完立刻输出最终 JSON，不要再反复查
+你最后一次回复必须是最终 JSON（形如 {"prompt": "...", "negative": "...", "notes": "..."}），
+不要再附带任何工具调用。
+"""
+
+KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模型）的审核员。用户会给你：
+① 一段中文画面描述；② 目前生成的英文提示词；③ 负向提示词；④ 长度统计。
+
+请严格审核，并只输出一个 JSON（不要解释、不要代码块）：
+{
+  "score": 0-100 的整数（要素覆盖度、英文自然度、画面可画性、长度是否合适）,
+  "problems": ["具体问题，最多 5 条，没有就空数组"],
+  "missing": ["中文描述里有、但提示词没体现的要素，最多 5 条"],
+  "prompt": "修正后的英文提示词（一整段自然语言）",
+  "negative": "修正后的英文负向提示词（逗号分隔）"
+}
+
+审核要点：
+- 关键要素是否都在：主体/外貌/服装/表情动作/场景/光线/镜头/风格/氛围
+- 是不是写成了 tag 堆砌、下划线、或者带权重的写法（这是错的，必须改成句子）
+- 是否夹带了画面里没有的内容、对白、心理活动
+- 长度是否在 60~120 个英文单词之间；太笼统就补细节，太啰嗦就删重复
+如果你认为已经足够好，可以把 prompt/negative 原样返回，并给出高分。
 """
 
 # 用户可在界面上选择的"额外要求"，会被拼进 prompt
@@ -738,13 +848,18 @@ def ping_llm(cfg):
         return "ok"
 
 
-def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6):
+def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
+             prompt_model=DEFAULT_MODEL):
     model = (cfg.get("model") or "").strip()
-    system = SYSTEM_PROMPT
+    prof = get_model(prompt_model)
+    natural = prof["mode"] == "natural"
+    system = KREA_SYSTEM_PROMPT if natural else SYSTEM_PROMPT
     if extra_rules:
         system += "\n补充要求：" + extra_rules + "\n"
-    if max_tags:
+    if max_tags and not natural:
         system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
+    if natural:
+        system += "\n本次英文提示词长度：60~120 个英文单词。\n"
 
     body = _post_chat(cfg, {
         "model": model,
@@ -870,6 +985,19 @@ def _brief_tag(h):
 def run_tool(name, args):
     """执行一个工具调用，返回 (给模型的文本, 给界面显示的摘要)。"""
     args = args if isinstance(args, dict) else {}
+    if name == "lookup_term":
+        # Krea 2 用：只做「中文 → 英文」术语对照，不要求是 tag。
+        q = str(args.get("query") or "").strip()
+        limit = int(args.get("limit") or 6)
+        rows = search_tags(q, limit=max(1, min(limit, 12)))
+        if not rows:
+            return ("没有找到「%s」的对照。换个更常见的说法试试。" % q,
+                    "术语查「%s」→ 无结果" % q)
+        lines = ["%s（%s）" % (r.get("tag"), r.get("cn") or "无中文名") for r in rows]
+        return ("中英术语对照：\n%s\n（这些只是术语参考，请写成自然语言句子）"
+                % "\n".join(lines),
+                "术语查「%s」→ %s" % (q, "、".join(str(r.get("tag")) for r in rows[:4])))
+
     if name == "search_tags":
         q = str(args.get("query") or "").strip()
         limit = int(args.get("limit") or 8)
@@ -920,9 +1048,66 @@ def _pick_tag_lists(parsed):
     return pos, neg
 
 
+# ---------------------------------------------------------------- Krea 2：自然语言结果
+
+_TAG_STYLE = re.compile(r"[a-z]+_[a-z_0-9]+")
+_WEIGHT_STYLE = re.compile(r"\([^()]*:[0-9.]+\)")
+
+
+def word_count(text):
+    """英文词数（只数字母词，标点不算）。"""
+    return len(re.findall(r"[A-Za-z][A-Za-z'-]*", text or ""))
+
+
+def _clean_prompt(text):
+    """清掉模型偶尔裹上的引号 / Markdown 代码块 / 前缀。"""
+    s = str(text or "").strip()
+    s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+    s = re.sub(r"\s*```$", "", s).strip()
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    return " ".join(s.split())
+
+
+def natural_fields(parsed, raw=""):
+    """从模型输出里取出 prompt / negative / notes，尽量宽容。"""
+    p = parsed if isinstance(parsed, dict) else {}
+    prompt = ""
+    for key in ("prompt", "text", "positive", "description"):
+        v = p.get(key)
+        if isinstance(v, str) and v.strip():
+            prompt = v
+            break
+        if isinstance(v, list) and v:
+            prompt = ", ".join(str(x) for x in v if str(x).strip())
+            break
+    if not prompt:
+        prompt = raw or ""
+    negative = p.get("negative") or p.get("negative_prompt") or ""
+    if isinstance(negative, list):
+        negative = ", ".join(str(x) for x in negative if str(x).strip())
+    return {
+        "prompt": _clean_prompt(prompt),
+        "negative": _clean_prompt(negative),
+        "notes": str(p.get("notes") or "").strip(),
+    }
+
+
+def prompt_style_warnings(prompt):
+    """自然语言模式下顺手体检：发现它又写回 tag 风格就提示（不阻断结果）。"""
+    warns = []
+    tags = _TAG_STYLE.findall(prompt or "")
+    if len(tags) >= 3:
+        warns.append("出现了 %d 个下划线 tag（%s…），Krea 2 更吃自然语言句子"
+                     % (len(tags), "、".join(tags[:3])))
+    if _WEIGHT_STYLE.search(prompt or ""):
+        warns.append("出现了权重语法，Krea 2 不需要")
+    return warns
+
+
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                    max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
-                   progress=None):
+                   progress=None, prompt_model=DEFAULT_MODEL):
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
@@ -940,16 +1125,24 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                 pass
 
     model = (cfg.get("model") or "").strip()
-    system = SYSTEM_PROMPT + AGENT_EXTRA
+    prof = get_model(prompt_model)
+    natural = prof["mode"] == "natural"
+    tools_ok = bool(use_tools)
+    if natural:
+        system = KREA_SYSTEM_PROMPT
+        if tools_ok:
+            system += KREA_AGENT_EXTRA
+        system += "\n本次英文提示词长度：60~120 个英文单词。\n"
+    else:
+        system = SYSTEM_PROMPT + AGENT_EXTRA
+        if max_tags:
+            system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
     if extra_rules:
         system += "\n补充要求：" + extra_rules + "\n"
-    if max_tags:
-        system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
 
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": text}]
     trace, stats = [], {"llm_calls": 0, "tool_calls": 0}
-    tools_ok = bool(use_tools)
     content, parsed = "", None
 
     # 进度模型：把整件事切成很多小格，避免进度条"要么不动、要么直接到底"
@@ -982,7 +1175,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         payload = {"model": model, "messages": messages,
                    "temperature": float(temperature), "stream": False}
         if tools_ok:
-            payload["tools"] = AGENT_TOOLS
+            payload["tools"] = KREA_TOOLS if natural else AGENT_TOOLS
             payload["tool_choice"] = "auto"
         call_no[0] += 1
         say("第 %d/%d 轮：正在请求模型…" % (rnd, max_r), gen_pct(0.05))
@@ -1009,17 +1202,30 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         if not calls:
             content = msg.get("content") or ""
             parsed = _extract_json(content)
+            if natural and not parsed and content.strip():
+                # Krea 2 的模型（尤其本地模型）经常直接吐一段英文散文，
+                # 这本来就是想要的格式，所以不再逼它套 JSON。
+                parsed = {"prompt": content, "negative": "", "notes": ""}
             if parsed:
-                trace.append({"round": rnd, "tool": "输出结果", "args": {},
-                              "summary": "模型给出最终 tag"})
-                pos_n = len(parsed.get("positive") or [])
-                say("模型给出最终结果：正向 %d 个、负向 %d 个"
-                    % (pos_n, len(parsed.get("negative") or [])), 63)
+                if natural:
+                    fields = natural_fields(parsed, content)
+                    trace.append({"round": rnd, "tool": "输出结果", "args": {},
+                                  "summary": "模型给出英文提示词（%d 词）"
+                                             % word_count(fields["prompt"])})
+                    say("模型给出英文提示词（%d 词）" % word_count(fields["prompt"]), 63)
+                else:
+                    trace.append({"round": rnd, "tool": "输出结果", "args": {},
+                                  "summary": "模型给出最终 tag"})
+                    pos_n = len(parsed.get("positive") or [])
+                    say("模型给出最终结果：正向 %d 个、负向 %d 个"
+                        % (pos_n, len(parsed.get("negative") or [])), 63)
                 break
             # 既没有工具调用也没有 JSON：把这段当回答，让模型继续
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user",
-                             "content": "请按约定格式输出最终 JSON（positive / negative / notes）。"})
+                             "content": ("请按约定格式输出最终 JSON（prompt / negative / notes）。"
+                                         if natural else
+                                         "请按约定格式输出最终 JSON（positive / negative / notes）。")})
             say("模型没按格式返回，正在要求它重新输出", gen_pct(0.9))
             if rnd == max_r:
                 break
@@ -1058,11 +1264,42 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         except Exception:
             content = ""
         parsed = _extract_json(content)
+        if natural and not parsed and content.strip():
+            parsed = {"prompt": content, "negative": "", "notes": ""}
 
     if not parsed or not isinstance(parsed, dict):
         return {"raw": content, "parsed": None, "trace": trace, "stats": stats,
                 "tools_used": tools_ok,
                 "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
+
+    # ---- Krea 2：英文自然语言 ----
+    if natural:
+        fields = natural_fields(parsed, content)
+        if not fields["prompt"]:
+            return {"raw": content, "parsed": parsed, "trace": trace, "stats": stats,
+                    "tools_used": tools_ok, "mode": "natural",
+                    "error": "模型没有给出英文提示词，已把原文给你，可手动整理"}
+        stats["words"] = word_count(fields["prompt"])
+        stats["warnings"] = prompt_style_warnings(fields["prompt"])
+        say("整理英文提示词：%d 词" % stats["words"], 64.8)
+        out = {
+            "mode": "natural", "model": prof["key"], "raw": content,
+            "prompt": fields["prompt"], "negative": fields["negative"],
+            "negative_prompt": fields["negative"], "notes": fields["notes"],
+            "trace": trace, "stats": stats, "tools_used": tools_ok, "review": None,
+        }
+        if reflect:
+            say("进入自省环节：让审核员给这段提示词打分", 66)
+            try:
+                out["review"] = self_refine_natural(cfg, text, out, rounds=reflect_rounds,
+                                                    progress=say)
+            except Exception as e:  # noqa: BLE001
+                out["review"] = {"error": str(e), "rounds": []}
+                say("自省没跑完：%s" % e)
+            out["stats"]["words"] = word_count(out["prompt"])
+            out["stats"]["warnings"] = prompt_style_warnings(out["prompt"])
+        say("完成：%d 词英文提示词" % out["stats"]["words"], 97)
+        return out
 
     pos, neg = _pick_tag_lists(parsed)
     say("按 33 万条词表逐条校验 %d 个 tag…" % (len(pos) + len(neg)), 64.8)
@@ -1173,6 +1410,84 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             % (i, max(1, int(rounds)), score if score is not None else "—", changed),
             66.0 + i * 28.0 / max(1, int(rounds)))
         # 收敛条件：分数够高、或这一轮没改动
+        if (score is not None and score >= threshold) or changed == 0:
+            if score is not None and score >= threshold:
+                say("分数达到 %d，自省收敛" % threshold, 95)
+            break
+
+    return {"rounds": history,
+            "final_score": history[-1]["score"] if history else None,
+            "iterations": len(history)}
+
+
+def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None):
+    """Krea 2 版自省：审核英文提示词，按需重写（不强制造句模板）。"""
+    def say(msg, pct=None):
+        if progress:
+            try:
+                progress(msg, pct)
+            except TypeError:
+                try:
+                    progress(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception:  # noqa: BLE001
+                pass
+
+    model = (cfg.get("model") or "").strip()
+    history = []
+    rounds = max(1, int(rounds))
+
+    for i in range(1, rounds + 1):
+        say("自省第 %d/%d 轮：审核员评分中…" % (i, rounds),
+            66.0 + (i - 1) * 28.0 / rounds)
+        cur = result.get("prompt") or ""
+        neg = result.get("negative") or ""
+        ask = ("【中文描述】\n%s\n\n【当前英文提示词】\n%s\n\n【当前负向提示词】\n%s\n\n"
+               "【长度】%d 个英文单词\n\n请审核并输出 JSON。"
+               % (text, cur, neg or "（空）", word_count(cur)))
+        body = _post_chat(cfg, {
+            "model": model,
+            "messages": [{"role": "system", "content": KREA_CRITIC_SYSTEM},
+                         {"role": "user", "content": ask}],
+            "temperature": 0.2, "stream": False,
+        }, retries=3)
+        result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
+        try:
+            content = body["choices"][0]["message"].get("content") or ""
+        except Exception:
+            content = ""
+        crit = _extract_json(content)
+        if not crit:
+            history.append({"round": i, "score": None, "problems": ["评审没返回 JSON"],
+                            "missing": [], "changed": 0})
+            break
+
+        score = crit.get("score")
+        try:
+            score = int(score)
+        except Exception:
+            score = None
+        new_prompt = _clean_prompt(crit.get("prompt") or crit.get("positive") or "")
+        new_neg = crit.get("negative")
+        if isinstance(new_neg, list):
+            new_neg = ", ".join(str(x) for x in new_neg if str(x).strip())
+        new_neg = _clean_prompt(new_neg or "")
+        changed = 0
+        if new_prompt and new_prompt != cur:
+            result["prompt"] = new_prompt
+            changed += 1
+        if new_neg and new_neg != neg:
+            result["negative"] = new_neg
+            result["negative_prompt"] = new_neg
+            changed += 1
+        history.append({"round": i, "score": score,
+                        "problems": (crit.get("problems") or [])[:5],
+                        "missing": (crit.get("missing") or [])[:5],
+                        "changed": changed})
+        say("自省第 %d/%d 轮：%s 分，改动 %d 处"
+            % (i, rounds, score if score is not None else "—", changed),
+            66.0 + i * 28.0 / rounds)
         if (score is not None and score >= threshold) or changed == 0:
             if score is not None and score >= threshold:
                 say("分数达到 %d，自省收敛" % threshold, 95)
@@ -1513,6 +1828,9 @@ class Handler(BaseHTTPRequestHandler):
                     "configured": bool((cfg.get("api_key") or "").strip()),
                 },
                 "system_prompt": SYSTEM_PROMPT,
+                "krea_system_prompt": KREA_SYSTEM_PROMPT,
+                "models": list(MODELS.values()),
+                "default_model": DEFAULT_MODEL,
                 "categories": CATEGORY_NAMES,
                 "sources": [{"key": k, "label": v["label"]} for k, v in SOURCES.items()],
                 "default_source": DEFAULT_SOURCE,
@@ -1607,15 +1925,40 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "还没有填 API Key。请在右上角「模型设置」里填写，"
                              "或复制 config.example.json 为 config.json 后填入。"
                 })
+            pm = body.get("prompt_model") or DEFAULT_MODEL
+            if not is_known_model(pm):
+                return self._send(400, {"error": "不认识的模型：%s" % pm})
             try:
                 content, parsed, usage = call_llm(
                     cfg, text,
                     extra_rules=(body.get("extra_rules") or ""),
                     max_tags=int(body.get("max_tags") or 45),
                     temperature=float(body.get("temperature") or 0.6),
+                    prompt_model=pm,
                 )
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
+
+            if get_model(pm)["mode"] == "natural":
+                if not parsed or not isinstance(parsed, dict):
+                    return self._send(200, {"raw": content, "parsed": None, "mode": "natural",
+                                            "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"})
+                fields = natural_fields(parsed, content)
+                if not fields["prompt"]:
+                    return self._send(200, {"raw": content, "parsed": parsed, "mode": "natural",
+                                            "error": "模型没有给出英文提示词，已把原文给你"})
+                return self._send(200, {
+                    "mode": "natural",
+                    "raw": content,
+                    "prompt": fields["prompt"],
+                    "negative": fields["negative"],
+                    "negative_prompt": fields["negative"],
+                    "notes": fields["notes"],
+                    "stats": {"llm_calls": 1, "tool_calls": 0,
+                              "words": word_count(fields["prompt"]),
+                              "warnings": prompt_style_warnings(fields["prompt"])},
+                    "usage": usage,
+                })
 
             if not parsed or not isinstance(parsed, dict):
                 return self._send(200, {"raw": content, "parsed": None,
@@ -1646,6 +1989,44 @@ class Handler(BaseHTTPRequestHandler):
                     cfg[k] = ui[k].strip()
             if not (cfg.get("api_key") or "").strip():
                 return self._send(400, {"error": "还没有填 API Key"})
+
+            pm = body.get("prompt_model") or DEFAULT_MODEL
+            if not is_known_model(pm):
+                return self._send(400, {"error": "不认识的模型：%s" % pm})
+            if get_model(pm)["mode"] == "natural":
+                raw_prompt = body.get("prompt") or body.get("positive") or ""
+                raw_neg = body.get("negative") or ""
+                if isinstance(raw_prompt, list):
+                    raw_prompt = " ".join(str(x) for x in raw_prompt if str(x).strip())
+                if isinstance(raw_neg, list):
+                    raw_neg = ", ".join(str(x) for x in raw_neg if str(x).strip())
+                prompt = _clean_prompt(raw_prompt)
+                negative = _clean_prompt(raw_neg)
+                if not prompt:
+                    return self._send(400, {"error": "没有可评审的提示词"})
+                result = {"mode": "natural", "prompt": prompt, "negative": negative,
+                          "negative_prompt": negative,
+                          "stats": {"llm_calls": 0, "tool_calls": 0,
+                                    "words": word_count(prompt)}}
+                try:
+                    review = self_refine_natural(cfg, text, result,
+                                                 rounds=int(body.get("reflect_rounds") or 2))
+                except Exception as e:  # noqa: BLE001
+                    return self._send(500, {"error": str(e)})
+                log("重跑 Krea2 自省：%s 轮%s" % (
+                    review.get("iterations"),
+                    ("（%s 分）" % review.get("final_score"))
+                    if review.get("final_score") is not None else ""))
+                return self._send(200, {
+                    "mode": "natural", "review": review,
+                    "prompt": result["prompt"], "negative": result["negative"],
+                    "negative_prompt": result["negative"],
+                    "stats": {"llm_calls": result["stats"]["llm_calls"],
+                              "tool_calls": 0,
+                              "words": word_count(result["prompt"]),
+                              "warnings": prompt_style_warnings(result["prompt"])},
+                })
+
             pos = [str(t).strip() for t in (body.get("positive") or []) if str(t).strip()]
             neg = [str(t).strip() for t in (body.get("negative") or []) if str(t).strip()]
             if not pos and not neg:
@@ -1684,6 +2065,9 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "还没有填 API Key。请在「设置」页填写，"
                              "或复制 config.example.json 为 config.json 后填入。"
                 })
+            pm = body.get("prompt_model") or DEFAULT_MODEL
+            if not is_known_model(pm):
+                return self._send(400, {"error": "不认识的模型：%s" % pm})
             kwargs = dict(
                 extra_rules=(body.get("extra_rules") or ""),
                 max_tags=int(body.get("max_tags") or 45),
@@ -1692,11 +2076,19 @@ class Handler(BaseHTTPRequestHandler):
                 reflect=bool(body.get("reflect", True)),
                 reflect_rounds=int(body.get("reflect_rounds") or 2),
                 use_tools=bool(body.get("use_tools", True)),
+                prompt_model=pm,
             )
 
             def report(res):
                 st = res.get("stats") or {}
                 rv = res.get("review") or {}
+                if res.get("mode") == "natural":
+                    log("Krea2：%d 次模型调用 · %d 次工具调用 · %d 词 · 自省 %s 轮%s" % (
+                        st.get("llm_calls", 0), st.get("tool_calls", 0), st.get("words", 0),
+                        rv.get("iterations", 0),
+                        ("（%s 分）" % rv.get("final_score"))
+                        if rv.get("final_score") is not None else ""))
+                    return
                 log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
                     st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
                     ("（%s 分）" % rv.get("final_score"))

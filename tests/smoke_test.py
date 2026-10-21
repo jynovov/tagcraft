@@ -143,6 +143,7 @@ def main():
 
         say("页面：")
         for path, must in [("/", "中文转 tag"),
+                           ("/krea.html", "Krea 2 提示词"),
                            ("/favorites.html", "收藏"),
                            ("/history.html", "历史记录"),
                            ("/comfy.html", "工作流"),
@@ -151,8 +152,8 @@ def main():
             check("GET " + path, st == 200 and must in body, "HTTP %s" % st)
 
         say("静态资源：")
-        for path in ("/style.css", "/common.js", "/app.js", "/settings.js", "/history.js",
-                     "/favorites.js", "/comfy.js"):
+        for path in ("/style.css", "/common.js", "/app.js", "/krea.js", "/settings.js",
+                     "/history.js", "/favorites.js", "/comfy.js"):
             st, body = get(path)
             check("GET " + path, st == 200 and len(body) > 300, "%d 字节" % len(body))
 
@@ -168,6 +169,8 @@ def main():
             say("      词表 %s 条 · 来源 %s"
                 % (o.get("dict", {}).get("count"), o.get("dict", {}).get("source")))
             check("status 含词表源列表", bool(o.get("sources")))
+            check("status 含模型档案（NoobAI + Krea2）",
+                  {m.get("key") for m in (o.get("models") or [])} == {"noob", "krea"})
 
         st, body = post("/api/dict/validate",
                         {"tags": ["1girl", "masterpiece", "worst_quality", "zzz_fake_tag_zzz"]})

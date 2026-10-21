@@ -96,6 +96,21 @@ localStorage.clear();
 render();
 chk('没有收藏时给出提示', document.getElementById('list').innerHTML.indexOf('还没有收藏') >= 0);
 
+/* ---------- Krea2 记录 ---------- */
+const WORDY = 'A girl in a school uniform and over-the-knee socks stands on a beach at dusk, '
+  + 'looking back at the camera, warm sunset light, 35mm lens, cinematic anime illustration.';
+const wc = (WORDY.match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
+localStorage.clear();
+saveFavs([makeFav('黄昏海边', [], [WORDY], ['blurry'],
+                  { kind: 'krea', prompt: WORDY, negative: 'blurry' })]);
+render();
+const kh = document.getElementById('list').innerHTML;
+chk('Krea2 收藏有专属标签', kh.indexOf('Krea 2') >= 0);
+chk('Krea2 收藏默认收起提示词', kh.split('<details')[0].indexOf('over-the-knee') < 0);
+chk('Krea2 收藏有载入 Krea2 页按钮', kh.indexOf('载入 Krea2 页') >= 0);
+chk('Krea2 收藏显示词数', kh.indexOf(wc + ' 词') >= 0, String(wc));
+chk('Krea2 收藏仍有改名与删除', kh.indexOf('data-rename') >= 0 && kh.indexOf('data-del') >= 0);
+
 return R;
 })();`;
 
