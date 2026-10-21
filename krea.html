@@ -36,22 +36,18 @@
         <div class="card">
           <div class="card-title">描述画面（中文）</div>
           <textarea id="inputText" rows="11"
-            placeholder="用中文描述你想画的画面，可以写很长，情绪和氛围也写上（Ctrl+Enter 生成）"></textarea>
+            placeholder="中文描述，可以写很长（Ctrl+Enter 生成）"></textarea>
           <div class="row">
-            <label class="inline check" title="让模型自己查中英术语对照，再写提示词">
+            <label class="inline check" title="让模型先查中英术语对照，再写提示词；自省由设置页控制">
               <input id="useAgent" type="checkbox" checked> Agent 模式
             </label>
-            <span class="page-sub">自省在「设置」页统一开关</span>
+            <span class="page-sub">自省看设置</span>
           </div>
           <div class="row">
             <button id="btnGenerate" class="primary wide">生成提示词</button>
             <button id="btnClear" class="ghost">清空</button>
           </div>
-          <div class="hint-line">
-            输出 <b>英文自然语言</b>：一整段顺滑的描述，不用下划线 tag、不用权重语法。
-            <br><b>Agent 模式</b> = 模型先查术语再写；<b>自省</b> = 写完让审核员打分重写（设置页开关）。
-            <br>画面要素 → 场景 → 光线 → 镜头 → 风格 → 氛围，Krea 2 更吃这套。
-          </div>
+          <div class="hint-line">英文自然语言，不用 tag 和权重语法。</div>
         </div>
 
         <div class="card">
@@ -61,7 +57,6 @@
             <button id="btnTerm">查</button>
           </div>
           <div id="termResults" class="list scroll"></div>
-          <div class="hint-line">查到的英文只是术语参考，点一下就能复制，自己再揉进句子里。</div>
         </div>
       </div>
 
@@ -90,7 +85,7 @@
           <div id="warnLine" class="warn-line"></div>
 
           <label>英文提示词</label>
-          <textarea id="outPrompt" rows="8" placeholder="生成后会出现在这里，也可以直接手改"></textarea>
+          <textarea id="outPrompt" rows="8" placeholder="生成后会出现在这里"></textarea>
           <div class="row">
             <span id="promptCount" class="prompt-count">0 词</span>
             <span class="spacer" style="flex:1"></span>
@@ -98,25 +93,14 @@
           </div>
 
           <label style="margin-top:14px">负向提示词</label>
-          <textarea id="outNeg" rows="2" placeholder="blurry, low quality, extra fingers, watermark"></textarea>
+          <textarea id="outNeg" rows="2" placeholder="blurry, low quality, watermark"></textarea>
           <div class="row">
             <button id="btnCopyNeg" class="small">复制负向</button>
             <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
           </div>
           <div class="row">
-            <a href="/comfy.html" class="page-sub">还没配 ComfyUI？去 ComfyUI 页粘贴工作流 →</a>
+            <a href="/comfy.html" class="page-sub">去配置 ComfyUI →</a>
           </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Krea 2 的写法要点</div>
-          <ol class="howto">
-            <li><b>写句子，不写 tag</b>：Krea 2 吃的是自然语言描写，逗号堆词和下划线反而更差。</li>
-            <li><b>先主体后环境</b>：谁 / 什么 → 外貌服装 → 动作表情 → 场景 → 光线 → 镜头 → 氛围。</li>
-            <li><b>把情绪翻成画面</b>：「孤独」写成「空荡的站台，远处一盏灯」。</li>
-            <li><b>长度 60~120 词</b>：太短容易空，太长容易自相矛盾。</li>
-            <li><b>负向提示词</b>用英文短语：blurry, low quality, extra fingers, watermark。</li>
-          </ol>
         </div>
       </div>
     </div>
