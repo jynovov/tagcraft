@@ -117,6 +117,28 @@ chk('导出内容包含收藏记录', ex.count === 1 && ex.favorites.length === 
 chk('导出保留 Krea2 类型', ex.favorites[0].kind === 'krea');
 chk('有收藏时导出按钮可用', document.getElementById('btnExport').disabled === false);
 
+/* ---------- 导入 ---------- */
+const parsed = parseFavoritesImport(JSON.stringify(ex));
+chk('导入能解析导出文件', parsed.ok && parsed.favs.length === 1);
+chk('导入保留 Krea2 类型', parsed.favs[0].kind === 'krea');
+const raw = parseFavoritesImport(JSON.stringify([{ id: 'x1', text: '旧格式', pos: ['1girl'] }]));
+chk('兼容早期数组格式', raw.ok && raw.favs.length === 1);
+chk('错误格式被拒绝',
+    parseFavoritesImport('{"format":"other","favorites":[]}').ok === false);
+chk('坏 JSON 被拒绝', parseFavoritesImport('{oops').ok === false);
+chk('无效条目被过滤',
+    parseFavoritesImport(JSON.stringify({
+      format: 'tagcraft.favorites',
+      favorites: [{ id: 'ok', text: 'a' }, { noid: true }, null]
+    })).favs.length === 1);
+const merged = mergeFavorites([{ id: 'a' }, { id: 'b' }],
+                              [{ id: 'b' }, { id: 'c' }, { id: 'd' }]);
+chk('合并时按 id 去重', merged.list.map(f => f.id).join(',') === 'c,d,a,b',
+    merged.list.map(f => f.id).join(','));
+chk('合并统计重复数', merged.skipped === 1, String(merged.skipped));
+chk('导入超过 120 条会截断',
+    mergeFavorites([], Array.from({ length: 130 }, (_, i) => ({ id: 'x' + i }))).list.length === 120);
+
 return R;
 })();`;
 

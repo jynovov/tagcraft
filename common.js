@@ -389,3 +389,72 @@ function favoritesExportPayload(list) {
   };
 }
 
+/* ---------------------------------------------------------------- 收藏导入
+ * 容错读取导出的 JSON：既认新版 {format, favorites}，也认早期直接导出的数组。
+ * 只保留白名单字段，避免把无关内容写进本地存储。                          */
+function normalizeFavItem(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const id = typeof x.id === 'string' ? x.id.trim() : '';
+  const text = typeof x.text === 'string' ? x.text : '';
+  const title = typeof x.title === 'string' ? x.title.trim() : '';
+  if (!id || (!text.trim() && !title)) return null;
+  const strArr = v => (Array.isArray(v) ? v.filter(t => typeof t === 'string' && t.trim()) : []);
+  const item = {
+    id: id,
+    title: title || '未命名',
+    text: text,
+    quality: strArr(x.quality),
+    pos: strArr(x.pos),
+    neg: strArr(x.neg),
+    time: typeof x.time === 'string' ? x.time : ''
+  };
+  if (x.kind === 'krea' || x.model === 'krea') {
+    item.kind = 'krea';
+    item.model = 'krea';
+  }
+  if (typeof x.prompt === 'string') item.prompt = x.prompt;
+  if (typeof x.negative === 'string') item.negative = x.negative;
+  return item;
+}
+
+/** 解析导入文件内容；返回 {ok, favs, total, invalid} 或 {ok:false, error} */
+function parseFavoritesImport(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  if (!raw.trim()) return { ok: false, error: '文件是空的' };
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { return { ok: false, error: '不是合法的 JSON' }; }
+  const isArr = Array.isArray(data);
+  const list = isArr ? data : (data && Array.isArray(data.favorites) ? data.favorites : null);
+  if (!list) return { ok: false, error: '文件里没有收藏列表' };
+  if (!isArr && data.format && data.format !== 'tagcraft.favorites') {
+    return { ok: false, error: '不是 TagCraft 的收藏文件' };
+  }
+  const favs = list.map(normalizeFavItem).filter(Boolean);
+  if (!favs.length) return { ok: false, error: '没有可导入的收藏' };
+  return { ok: true, favs: favs, total: list.length, invalid: list.length - favs.length };
+}
+
+/** 合并收藏：按 id 去重，新的放前面，最多保留 120 条 */
+function mergeFavorites(existing, incoming) {
+  const base = Array.isArray(existing) ? existing : [];
+  const add = Array.isArray(incoming) ? incoming : [];
+  const seen = new Set(base.map(f => f && f.id).filter(Boolean));
+  const fresh = [];
+  let skipped = 0;
+  for (const f of add) {
+    if (!f || !f.id) continue;
+    if (seen.has(f.id)) { skipped += 1; continue; }
+    seen.add(f.id);
+    fresh.push(f);
+  }
+  const list = fresh.concat(base);
+  const dropped = Math.max(0, list.length - 120);
+  return {
+    list: list.slice(0, 120),
+    added: Math.min(fresh.length, 120),
+    skipped: skipped,
+    dropped: dropped
+  };
+}
+
+

@@ -188,9 +188,43 @@ function exportFavs() {
   }
 }
 
+/** 从文本导入收藏；返回合并结果（失败返回 null） */
+function importFavsFromText(text) {
+  const parsed = parseFavoritesImport(text);
+  if (!parsed.ok) { toast('导入失败：' + parsed.error, true); return null; }
+  const merged = mergeFavorites(loadFavs(), parsed.favs);
+  saveFavs(merged.list);
+  render();
+  let msg = '导入 ' + merged.added + ' 条';
+  if (merged.skipped) msg += ' · 跳过重复 ' + merged.skipped + ' 条';
+  if (parsed.invalid) msg += ' · 忽略无效 ' + parsed.invalid + ' 条';
+  if (merged.dropped) msg += ' · 超过 120 条上限，丢弃 ' + merged.dropped + ' 条';
+  toast(msg, merged.dropped > 0);
+  return merged;
+}
+
+/** 读取用户选择的 JSON 文件并导入 */
+function importFavsFile(file) {
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    toast('文件太大（超过 5MB）', true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => importFavsFromText(String(reader.result || ''));
+  reader.onerror = () => toast('读取文件失败', true);
+  reader.readAsText(file, 'utf-8');
+}
+
 function init() {
   renderSidebar('fav');
   render();
+  $('btnImport').addEventListener('click', () => $('favFile').click());
+  $('favFile').addEventListener('change', () => {
+    const f = $('favFile').files && $('favFile').files[0];
+    importFavsFile(f);
+    $('favFile').value = '';   // 允许再次选择同一个文件
+  });
   $('btnExport').addEventListener('click', exportFavs);
   $('btnClearAll').addEventListener('click', () => {
     if (!loadFavs().length) return;
