@@ -25,8 +25,6 @@ SOFTWARE.
 
 上面这份 MIT 许可证**只适用于代码**（.py / .js / .html / .css / .cs / .bat 等）。
 
-assets/ 目录下的图片（source_deepseek_girl.jpg 及派生的图标文件）由豆包 AI 生成，
-画面包含 DeepSeek 的名称与形象；图片版权、DeepSeek 名称与商标归各自权利人所有，
-**不在 MIT 授权范围内**，仅作本项目本地图标使用，请勿公开分发或商用。
-
-旧素材 source_keqing_user.jpg 是《原神》角色「刻晴」的同人作品，版权归原作者所有，已停用。
+assets/ 目录下的插画（source_keqing_user.jpg 及其派生的图标文件）是《原神》
+角色「刻晴」的同人作品，**版权归原作者所有，不在 MIT 授权范围内**，
+请勿单独提取用于其他项目或商业用途。

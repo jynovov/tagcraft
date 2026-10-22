@@ -5,13 +5,14 @@
 
 流程：
     1. 按 CROP 坐标裁出脸部方形区域
-    2. 提一点对比度与饱和度（缩到 32px 会糊）
-    3. 放大后轻度锐化，圆形取景，加一圈黄色+深蓝描边
+    2. 提一点对比度与饱和度（原图偏淡，缩到 32px 会糊）
+    3. 放大后轻度锐化，圆形取景，加一圈紫色描边
     4. 输出 PNG + 多尺寸 ICO（小尺寸必须用 BMP 条目，见 ico_util.py）
 
 素材来源：
-    仓库内 assets/source_deepseek_girl.jpg —— 豆包 AI 生成的 DeepSeek 形象图
-    图片版权/商标归各自权利人，仅作本地图标使用；MIT 只覆盖代码，不覆盖这张图。
+    仓库内 assets/source_keqing_user.jpg —— 刻晴同人插画
+    刻晴是米哈游《原神》的角色，该插画版权归原作者所有；
+    MIT 许可证只覆盖本仓库的代码，不覆盖这张图。
 """
 
 import os
@@ -23,14 +24,14 @@ from ico_util import write_ico
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
-SRC = os.path.join(ASSETS, "source_deepseek_girl.jpg")
+SRC = os.path.join(ASSETS, "source_keqing_user.jpg")
 
-S = 512                      # 输出画布
-CROP = (270, 80, 1290, 1100)  # 只保留面部：以脸为中心的 1020×1020 方形取景
+S = 512                      # 输出画布（源图不大，做 512 足够，避免过度放大发虚）
+CROP = (165, 268, 425, 528)  # 只保留面部：以脸部为中心的 260×260 方形取景
 
-RING = (255, 222, 128)       # 外圈暖黄描边
-RING2 = (35, 62, 138)        # 外圈深蓝描边
-BG_EDGE = (20, 30, 60)       # 圆外底色
+RING = (226, 210, 248)       # 外圈亮描边
+RING2 = (120, 78, 190)       # 外圈暗描边
+BG_EDGE = (46, 26, 78)       # 圆外底色
 
 
 def load_head():
