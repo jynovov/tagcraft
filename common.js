@@ -61,12 +61,12 @@ function renderSidebar(active) {
   document.getElementById('btnShutdown').addEventListener('click', shutdown);
 }
 
-/* ---------------------------------------------------------------- 模型切换
- * 两个模型是完全不同的提示词范式，所以各自一个页面，由一个分段开关来回切。
+/* ---------------------------------------------------------------- 模式切换
+ * 两种提示词范式各自一个页面，由一个分段开关来回切。
  * 与后端 server.py 的 MODELS 保持一致。                                   */
 const PROMPT_MODELS = [
-  { key: 'noob', label: 'NoobAI 系', sub: 'Danbooru tag', href: '/', badge: 'SDXL 动漫' },
-  { key: 'krea', label: 'Krea 2', sub: '英文自然语言', href: '/krea.html', badge: '自然语言' }
+  { key: 'noob', label: 'Danbooru tag', href: '/' },
+  { key: 'krea', label: '英文自然语言', href: '/krea.html' }
 ];
 
 function modelInfo(key) {
@@ -78,13 +78,12 @@ function renderModelSwitch(active) {
   const host = document.getElementById('modelSwitch');
   if (!host) return;
   host.innerHTML = '<div class="mswitch-row">' +
-    '<span class="mswitch-cap">模型</span>' +
-    '<div class="mswitch" role="tablist" aria-label="切换生成模型">' +
+    '<span class="mswitch-cap">模式</span>' +
+    '<div class="mswitch" role="tablist" aria-label="切换提示词模式">' +
     PROMPT_MODELS.map(m => `
       <a class="mswitch-item${m.key === active ? ' active' : ''}" href="${m.href}"
          role="tab" data-model="${m.key}" aria-selected="${m.key === active}">
         <span class="mswitch-name">${m.label}</span>
-        <span class="mswitch-sub">${m.sub}</span>
       </a>`).join('') +
     '</div></div>';
 }

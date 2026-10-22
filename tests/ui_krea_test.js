@@ -144,14 +144,18 @@ restoreWork();
 chk('切页回来提示词还在', state.prompt.indexOf('over-the-knee') >= 0);
 chk('切页回来描述还在', document.getElementById('inputText').value === '切页测试');
 
-/* ---------- 5. 模型切换器 ---------- */
+/* ---------- 5. 模式切换器 ---------- */
 renderModelSwitch('krea');
 const ms = document.getElementById('modelSwitch').innerHTML;
-chk('切换器里两个模型都在', ms.indexOf('NoobAI') >= 0 && ms.indexOf('Krea 2') >= 0);
-chk('当前页高亮 Krea 2',
+chk('切换器标题是「模式」', ms.indexOf('mswitch-cap') >= 0 && ms.indexOf('模式') >= 0);
+chk('切换器只显示两种模式名',
+    ms.indexOf('Danbooru tag') >= 0 && ms.indexOf('英文自然语言') >= 0);
+chk('切换器里不再出现模型名',
+    ms.indexOf('NoobAI') < 0 && ms.indexOf('Krea 2') < 0);
+chk('当前页高亮英文自然语言',
     ms.indexOf('mswitch-item active') >= 0 && ms.indexOf('data-model="krea"') >= 0);
-chk('NoobAI 项指回生成页', ms.indexOf('href="/"') >= 0);
-chk('Krea2 项指向专用页', ms.indexOf('href="/krea.html"') >= 0);
+chk('Danbooru tag 项指回生成页', ms.indexOf('href="/"') >= 0);
+chk('英文自然语言项指向专用页', ms.indexOf('href="/krea.html"') >= 0);
 
 /* ---------- 6. 收藏 / 历史互通 ---------- */
 const fav = makeFav('黄昏海边', [], [WORDY], [],
