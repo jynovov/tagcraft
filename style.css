@@ -286,6 +286,10 @@ button.primary .ripple{
 }
 .step .tool{font-family:Consolas,monospace;color:#a3761f;font-weight:600}
 .step .sum{color:#9c8672}
+.step .pick{
+  background:#eef5e6;color:#5c7f3f;border:1px solid #dbe8cc;border-radius:999px;
+  padding:0 7px;font-size:11px;line-height:1.6;font-weight:600
+}
 .step .prob{flex:1 0 100%;color:#8a6d3b;padding-left:26px}
 .step.warn{color:var(--bad)}
 .step.warn .tool{color:var(--bad)}

@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DUMP = os.environ.get("MOCK_LLM_DUMP", "mock_llm_calls.json")
 CALLS = []
 FLAKY = {}          # 模型名 -> 还要失败几次（模拟服务端 503）
+CRITIC_DONE = {}    # 模型名 -> 本次运行已经评审过几轮（每次新的生成请求重置）
 
 
 def _is_critic(msgs):
@@ -75,6 +76,11 @@ class Handler(BaseHTTPRequestHandler):
         model = str(body.get("model") or "")
         has_tools = bool(body.get("tools"))
         natural = _is_natural(msgs)
+        # 模型名带 drop 时，模拟「第二轮分数反而更低」的剧本（验证会回退到最高分）
+        drop = "drop" in model.lower()
+        is_critic = _is_critic(msgs)
+        if not is_critic:
+            CRITIC_DONE[model] = 0   # 新一轮生成，评审计数从 0 开始
 
         def reply(content, tool_calls=None):
             msg = {"role": "assistant", "content": content}
@@ -101,9 +107,21 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(0.5)
 
         # ---- 自省（审核）阶段 ----
-        if _is_critic(msgs):
-            done = sum(1 for c in CALLS[:-1] if _is_critic(c.get("messages")))
+        if is_critic:
+            done = CRITIC_DONE.get(model, 0)
+            CRITIC_DONE[model] = done + 1
             if natural:
+                if drop:
+                    if done == 0:
+                        return reply(json.dumps({
+                            "score": 90, "problems": ["还可以更具体"], "missing": [],
+                            "prompt": "A lone girl on a dusk beach, HIGH_SCORE_PROMPT, "
+                                      "warm backlight, 35mm lens, cinematic illustration.",
+                        }, ensure_ascii=False))
+                    return reply(json.dumps({
+                        "score": 70, "problems": ["改坏了"], "missing": [],
+                        "prompt": "A girl, LOW_SCORE_PROMPT.",
+                    }, ensure_ascii=False))
                 if done == 0:
                     return reply(json.dumps({
                         "score": 78,
@@ -114,6 +132,20 @@ class Handler(BaseHTTPRequestHandler):
                 return reply(json.dumps({
                     "score": 95, "problems": [], "missing": [],
                     "prompt": KREA_PROMPT_V2,
+                }, ensure_ascii=False))
+            if drop:
+                if done == 0:
+                    return reply(json.dumps({
+                        "score": 90, "problems": ["高分版本"], "missing": [],
+                        "positive": ["masterpiece", "best_quality", "1girl", "solo",
+                                     "orange_sky", "looking_back"],
+                        "negative": ["worst_quality", "low_quality"],
+                    }, ensure_ascii=False))
+                return reply(json.dumps({
+                    "score": 70, "problems": ["低分版本"], "missing": [],
+                    "positive": ["masterpiece", "best_quality", "1girl", "solo",
+                                 "grey_hair", "looking_away"],
+                    "negative": ["worst_quality", "blurry"],
                 }, ensure_ascii=False))
             if done == 0:
                 return reply(json.dumps({

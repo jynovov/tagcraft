@@ -143,6 +143,29 @@ def main():
                       if m.get("role") == "assistant"))
             check("请求里带了 tools 定义", any(c.get("tools") for c in calls))
 
+        print("== 多轮自省分数回落时，采用最高分结果")
+        st, b = post(base, "/api/agent", {"text": text, "max_rounds": 3, "reflect": True,
+                                          "reflect_rounds": 2, "use_tools": False,
+                                          "api": dict(api, model="drop-tag")})
+        if st == 200:
+            r = json.loads(b)
+            rv = r.get("review") or {}
+            pos = [h["tag"] for h in (r.get("positive") or [])]
+            neg = [h["tag"] for h in (r.get("negative") or [])]
+            rounds = rv.get("rounds") or []
+            check("最终分数取最高分 90", rv.get("final_score") == 90,
+                  str(rv.get("final_score")))
+            check("记录采用第 1 轮", rv.get("picked_round") == 1,
+                  str(rv.get("picked_round")))
+            check("采用高分那轮的 tag", "orange_sky" in pos and "grey_hair" not in pos,
+                  str(pos))
+            check("负向也回到高分那轮", "blurry" not in neg, str(neg))
+            check("低分轮仍保留在评审历史",
+                  len(rounds) == 2 and rounds[1].get("score") == 70,
+                  str([x.get("score") for x in rounds]))
+        else:
+            check("最终分数取最高分 90", False, b[:200])
+
         print("== 接口不支持工具调用时自动降级")
         st, b = post(base, "/api/agent", {"text": text, "max_rounds": 3, "reflect": False,
                                           "api": dict(api, model="no-tools-model")})

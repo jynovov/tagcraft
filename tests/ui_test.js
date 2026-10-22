@@ -235,6 +235,21 @@ chk('导出格式标记正确',
 chk('导出条数正确', payload.count === 2 && payload.favorites.length === 2);
 chk('导出带导出时间', typeof payload.exportedAt === 'string' && payload.exportedAt.length > 10);
 
+/* ---------- 16. 自省取最高分 ---------- */
+state.review = {
+  rounds: [{ round: 1, score: 90, changed: 1, problems: [] },
+           { round: 2, score: 70, changed: 2, problems: [] }],
+  final_score: 90, picked_round: 1, iterations: 2
+};
+renderReview();
+chk('自省摘要显示采用第 1 轮',
+    document.getElementById('reviewSum').textContent.indexOf('采用第 1 轮') >= 0,
+    document.getElementById('reviewSum').textContent);
+chk('高分轮带「采用」标记',
+    document.getElementById('review').innerHTML.indexOf('class="pick"') >= 0);
+chk('两轮评分都还在历史里',
+    document.getElementById('review').innerHTML.indexOf('70 分') >= 0);
+
 return R;
 })();`;
 

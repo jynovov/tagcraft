@@ -170,6 +170,29 @@ def main():
             check("回填内容明确提醒「写成句子」",
                   any("自然语言" in (m.get("content") or "") for m in tool_msgs))
 
+        print("== 自省分数回落时，采用最高分那轮的提示词")
+        st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
+                                          "use_tools": False, "reflect": True,
+                                          "reflect_rounds": 2,
+                                          "api": dict(api, model="drop-krea")})
+        if st == 200:
+            r = json.loads(b)
+            rv = r.get("review") or {}
+            rounds = rv.get("rounds") or []
+            check("最终分数取最高分 90", rv.get("final_score") == 90,
+                  str(rv.get("final_score")))
+            check("记录采用第 1 轮", rv.get("picked_round") == 1,
+                  str(rv.get("picked_round")))
+            check("采用高分那轮的提示词",
+                  "HIGH_SCORE_PROMPT" in (r.get("prompt") or "") and
+                  "LOW_SCORE_PROMPT" not in (r.get("prompt") or ""),
+                  (r.get("prompt") or "")[:80])
+            check("低分轮仍保留在评审历史",
+                  len(rounds) == 2 and rounds[1].get("score") == 70,
+                  str([x.get("score") for x in rounds]))
+        else:
+            check("最终分数取最高分 90", False, b[:200])
+
         print("== 单次生成（不走智能体）")
         st, b = post(base, "/api/generate", {"text": text, "prompt_model": "krea", "api": api})
         if st == 200:

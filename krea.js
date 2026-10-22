@@ -255,10 +255,12 @@ function renderReview() {
   if (!rv) { box.hidden = true; $('review').innerHTML = ''; return; }
   box.hidden = false;
   const rounds = rv.rounds || [];
+  const picked = (rv.picked_round && rv.final_score != null)
+    ? ' · 采用第 ' + rv.picked_round + ' 轮（' + rv.final_score + ' 分）'
+    : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
   $('reviewSum').textContent = rv.error
     ? '自省评审 · 未完成（点开可重试）'
-    : '自省评审 · ' + rounds.length + ' 轮' +
-      (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
+    : '自省评审 · ' + rounds.length + ' 轮' + picked;
   if (rv.error) {
     $('review').innerHTML =
       '<div class="step"><span class="tool">提示</span><span class="sum">' +
@@ -281,6 +283,7 @@ function renderReview() {
         <span class="rnd">${i + 1}</span>
         <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
         <span class="sum">改动 ${r.changed || 0} 处${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
+        ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
         ${probs}${miss}
       </div>`;
   }).join('');

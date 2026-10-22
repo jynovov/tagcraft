@@ -1355,7 +1355,9 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
 
     model = (cfg.get("model") or "").strip()
     history = []
-    best = {"score": -1, "positive": None, "negative": None}
+    # 多轮评审里分数可能回落，最后要采用「得分最高」的那一轮结果
+    best = {"score": -1, "round": None, "positive": None,
+            "positive_unknown": None, "negative": None, "negative_unknown": None}
 
     for i in range(1, max(1, int(rounds)) + 1):
         say("自省第 %d/%d 轮：审核员评分中…" % (i, max(1, int(rounds))),
@@ -1406,7 +1408,11 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
                         "missing": (crit.get("missing") or [])[:5],
                         "changed": changed})
         if score is not None and score > best["score"]:
-            best = {"score": score, "positive": result["positive"], "negative": result["negative"]}
+            best = {"score": score, "round": i,
+                    "positive": result["positive"],
+                    "positive_unknown": result["positive_unknown"],
+                    "negative": result["negative"],
+                    "negative_unknown": result["negative_unknown"]}
         say("自省第 %d/%d 轮：%s 分，改动 %d 个 tag"
             % (i, max(1, int(rounds)), score if score is not None else "—", changed),
             66.0 + i * 28.0 / max(1, int(rounds)))
@@ -1416,8 +1422,17 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
                 say("分数达到 %d，自省收敛" % threshold, 95)
             break
 
+    # 回退到得分最高的那一轮（低分轮只留在历史里，不覆盖最终结果）
+    if best["positive"] is not None:
+        result["positive"] = best["positive"]
+        result["positive_unknown"] = best["positive_unknown"]
+        result["negative"] = best["negative"]
+        result["negative_unknown"] = best["negative_unknown"]
+
+    last_score = history[-1]["score"] if history else None
     return {"rounds": history,
-            "final_score": history[-1]["score"] if history else None,
+            "final_score": best["score"] if best["score"] >= 0 else last_score,
+            "picked_round": best["round"],
             "iterations": len(history)}
 
 
@@ -1438,6 +1453,8 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
     model = (cfg.get("model") or "").strip()
     history = []
     rounds = max(1, int(rounds))
+    # 多轮评审里分数可能回落，最后采用「得分最高」的那一轮提示词
+    best = {"score": -1, "round": None, "prompt": None}
 
     for i in range(1, rounds + 1):
         say("自省第 %d/%d 轮：审核员评分中…" % (i, rounds),
@@ -1477,6 +1494,8 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
                         "problems": (crit.get("problems") or [])[:5],
                         "missing": (crit.get("missing") or [])[:5],
                         "changed": changed})
+        if score is not None and score > best["score"]:
+            best = {"score": score, "round": i, "prompt": result["prompt"]}
         say("自省第 %d/%d 轮：%s 分，改动 %d 处"
             % (i, rounds, score if score is not None else "—", changed),
             66.0 + i * 28.0 / rounds)
@@ -1485,8 +1504,14 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
                 say("分数达到 %d，自省收敛" % threshold, 95)
             break
 
+    # 回退到得分最高的那一轮（低分轮只留在历史里，不覆盖最终提示词）
+    if best["prompt"] is not None:
+        result["prompt"] = best["prompt"]
+
+    last_score = history[-1]["score"] if history else None
     return {"rounds": history,
-            "final_score": history[-1]["score"] if history else None,
+            "final_score": best["score"] if best["score"] >= 0 else last_score,
+            "picked_round": best["round"],
             "iterations": len(history)}
 
 
