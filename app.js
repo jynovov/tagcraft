@@ -433,7 +433,8 @@ function bindUnknown() {
 }
 
 function closePop() {
-  const p = document.querySelector('.pop');
+  // 只关「未识别候选」气泡，别把「示例」菜单一起关掉
+  const p = document.querySelector('.pop:not(.example-pop)');
   if (p) p.remove();
 }
 

@@ -317,8 +317,14 @@ function showExampleMenu(btn, onPick) {
   document.body.appendChild(pop);
 
   const r = btn.getBoundingClientRect();
-  pop.style.top = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 8) + 'px';
-  pop.style.left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 10) + 'px';
+  // 下面放不下就翻到按钮上方，避免菜单盖住触发按钮
+  const below = r.bottom + 6;
+  const above = r.top - pop.offsetHeight - 6;
+  const top = (below + pop.offsetHeight <= window.innerHeight - 8)
+    ? below
+    : Math.max(8, above);
+  pop.style.top = top + 'px';
+  pop.style.left = Math.min(Math.max(8, r.left), window.innerWidth - pop.offsetWidth - 10) + 'px';
 }
 
 /** 给某个输入框绑定「示例」按钮 */
