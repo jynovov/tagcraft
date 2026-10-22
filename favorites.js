@@ -67,6 +67,7 @@ function render() {
   const list = loadFavs();
   $('favCount').textContent = list.length + ' 条';
   $('btnClearAll').hidden = !list.length;
+  $('btnExport').disabled = !list.length;
 
   if (!list.length) {
     $('list').innerHTML = '<div class="empty">还没有收藏。去「生成」页生成一次，然后点右上角 ★ 收藏这套。</div>';
@@ -165,9 +166,32 @@ function copyText(v, ok) {
   navigator.clipboard.writeText(v).then(() => toast(ok), () => toast('复制失败', true));
 }
 
+/** 导出全部收藏为 JSON 文件（下载） */
+function exportFavs() {
+  const list = loadFavs();
+  if (!list.length) { toast('还没有收藏可导出', true); return; }
+  const data = favoritesExportPayload(list);
+  const stamp = data.exportedAt.slice(0, 19).replace(/[:T]/g, '-');
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tagcraft-favorites-' + stamp + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    toast('已导出 ' + list.length + ' 条收藏');
+  } catch (e) {
+    toast('导出失败：' + e.message, true);
+  }
+}
+
 function init() {
   renderSidebar('fav');
   render();
+  $('btnExport').addEventListener('click', exportFavs);
   $('btnClearAll').addEventListener('click', () => {
     if (!loadFavs().length) return;
     if (!confirm('清空所有收藏？')) return;

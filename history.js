@@ -2,9 +2,28 @@
 
 const $ = (id) => document.getElementById(id);
 
+function renderStats(list) {
+  const box = $('hisStats');
+  if (!box) return;
+  if (!list.length) { box.innerHTML = ''; box.hidden = true; return; }
+  box.hidden = false;
+  const s = historyStats(list);
+  const chips = [
+    ['记录', s.count + ' 条'],
+    ['模式', 'Danbooru tag ' + s.tagCount + ' · 自然语言 ' + s.kreaCount],
+    ['未识别率', s.unknownRate == null ? '—' : (s.unknownRate * 100).toFixed(1) + '%'],
+    ['平均自省分', s.avgScore == null ? '—' : s.avgScore.toFixed(0)],
+    ['平均耗时', s.avgMs == null ? '—' : (s.avgMs / 1000).toFixed(1) + ' s']
+  ];
+  box.title = '基于最近 10 条记录；旧记录没有统计字段时显示 —';
+  box.innerHTML = chips.map(([k, v]) =>
+    `<span class="hstat"><span class="k">${k}</span><b>${v}</b></span>`).join('');
+}
+
 function render() {
   const list = loadHistory();
   $('hisCount').textContent = list.length + ' 条';
+  renderStats(list);
 
   if (!list.length) {
     $('list').innerHTML = '<div class="empty">还没有记录，去「生成」页跑一次吧。</div>';

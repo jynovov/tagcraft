@@ -258,6 +258,8 @@ button.primary .ripple{
 }
 .pop button:hover{background:var(--accent-soft);color:var(--accent2);transform:none}
 .pop button.del{color:var(--bad)}
+.example-pop{width:min(460px,calc(100vw - 24px));max-width:460px;max-height:min(60vh,520px);overflow-y:auto}
+.example-pop button{white-space:normal;line-height:1.55;text-align:left}
 
 /* ---------------- 折叠面板 ---------------- */
 .fold{
@@ -360,6 +362,14 @@ button.primary .ripple{
 .empty{color:var(--dim);font-size:13px;padding:14px 2px}
 
 /* ---------------- 历史 / 收藏 ---------------- */
+.hstats{display:flex;flex-wrap:wrap;gap:8px;max-width:900px;margin-bottom:14px}
+.hstats[hidden]{display:none}
+.hstat{
+  display:inline-flex;align-items:center;gap:6px;background:var(--panel);
+  border:1px solid var(--line);border-radius:999px;padding:6px 13px;
+  box-shadow:var(--shadow);font-size:12px;color:var(--dim)
+}
+.hstat b{color:var(--text);font-size:12.5px;font-weight:700}
 .hcard{
   border:1px solid var(--line);border-radius:13px;background:#fffcf7;
   padding:11px 13px;margin-bottom:10px

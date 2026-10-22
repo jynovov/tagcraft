@@ -518,12 +518,21 @@ function renderProgress() {
 
 function pushHistory(text) {
   const list = loadHistory();
+  const st = state.stats || {};
+  const rv = state.review || {};
   list.unshift({
     kind: 'krea', model: 'krea',
     text: text.slice(0, 80),
     full: text,
     prompt: state.prompt,
     pos: [state.prompt],
+    stats: {
+      llm_calls: st.model || 0,
+      tool_calls: st.tool_calls || 0,
+      words: st.words || 0,
+      ms: st.ms || 0
+    },
+    score: rv.final_score != null ? rv.final_score : null,
     time: new Date().toLocaleString()
   });
   saveHistory(list);
@@ -693,6 +702,7 @@ function init() {
 
   $('btnFav').addEventListener('click', favCurrent);
   $('btnCopyPrompt').addEventListener('click', () => copy($('outPrompt').value));
+  bindExamplePicker('btnExample', 'inputText', saveWork);
   $('btnSendComfy').addEventListener('click', sendToComfy);
   $('btnTerm').addEventListener('click', doTerm);
   $('termInput').addEventListener('keydown', e => { if (e.key === 'Enter') doTerm(); });

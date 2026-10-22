@@ -203,6 +203,38 @@ state.progress = null;
 renderProgress();
 chk('清掉进度后收起', document.getElementById('progress').innerHTML === '');
 
+/* ---------- 13. 示例池 ---------- */
+chk('示例池至少 5 条', EXAMPLE_PROMPTS.length >= 5, String(EXAMPLE_PROMPTS.length));
+const ex4 = pickExamples(4);
+chk('一次抽 4 条示例', ex4.length === 4, String(ex4.length));
+chk('抽出的示例不重复', new Set(ex4).size === 4);
+chk('示例都是像样的中文描述',
+    ex4.every(t => /[\u4e00-\u9fa5]/.test(t) && t.length >= 12));
+
+/* ---------- 14. 历史统计 ---------- */
+const hs = historyStats([
+  { kind: 'tag', stats: { checked: 10, unknown: 2, ms: 3000 }, score: 80 },
+  { kind: 'tag', stats: { checked: 10, unknown: 0, ms: 5000 }, score: 90,
+    review: { final_score: 95 } },
+  { kind: 'krea', stats: { ms: 2000 }, review: { final_score: 100 } },
+  { text: '没有 stats 的旧记录' }
+]);
+chk('统计记录数', hs.count === 4, String(hs.count));
+chk('统计模式分布', hs.tagCount === 3 && hs.kreaCount === 1,
+    JSON.stringify([hs.tagCount, hs.kreaCount]));
+chk('未识别率只按 tag 记录算', Math.abs(hs.unknownRate - 0.1) < 1e-9,
+    String(hs.unknownRate));
+chk('平均自省分', hs.avgScore === 90, String(hs.avgScore));
+chk('平均耗时', Math.abs(hs.avgMs - 10000 / 3) < 1e-9, String(hs.avgMs));
+chk('空历史不崩', historyStats([]).count === 0 && historyStats([]).unknownRate === null);
+
+/* ---------- 15. 收藏导出 ---------- */
+const payload = favoritesExportPayload([{ id: 'f1' }, { id: 'f2' }]);
+chk('导出格式标记正确',
+    payload.format === 'tagcraft.favorites' && payload.version === 1);
+chk('导出条数正确', payload.count === 2 && payload.favorites.length === 2);
+chk('导出带导出时间', typeof payload.exportedAt === 'string' && payload.exportedAt.length > 10);
+
 return R;
 })();`;
 

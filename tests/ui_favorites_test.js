@@ -95,6 +95,7 @@ chk('改名后默认区仍不暴露描述', html2.split('<details')[0].indexOf('
 localStorage.clear();
 render();
 chk('没有收藏时给出提示', document.getElementById('list').innerHTML.indexOf('还没有收藏') >= 0);
+chk('没有收藏时导出按钮禁用', document.getElementById('btnExport').disabled === true);
 
 /* ---------- Krea2 记录 ---------- */
 const WORDY = 'A girl in a school uniform and over-the-knee socks stands on a beach at dusk, '
@@ -110,6 +111,11 @@ chk('Krea2 收藏默认收起提示词', kh.split('<details')[0].indexOf('over-t
 chk('Krea2 收藏有载入 Krea2 页按钮', kh.indexOf('载入 Krea2 页') >= 0);
 chk('Krea2 收藏显示词数', kh.indexOf(wc + ' 词') >= 0, String(wc));
 chk('Krea2 收藏仍有改名与删除', kh.indexOf('data-rename') >= 0 && kh.indexOf('data-del') >= 0);
+
+const ex = favoritesExportPayload(loadFavs());
+chk('导出内容包含收藏记录', ex.count === 1 && ex.favorites.length === 1);
+chk('导出保留 Krea2 类型', ex.favorites[0].kind === 'krea');
+chk('有收藏时导出按钮可用', document.getElementById('btnExport').disabled === false);
 
 return R;
 })();`;

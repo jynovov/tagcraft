@@ -266,3 +266,126 @@ function tidyResult(res) {
   out.positive.forEach(c => { delete c._i; });
   return out;
 }
+
+/* ---------------------------------------------------------------- 示例提示
+ * 输入框下方的「示例」按钮：随机抽 4 条中文描述，点一条直接填入。
+ * 都是 SFW 的通用画面描述，两个生成页共用。                                */
+const EXAMPLE_PROMPTS = [
+  '黄昏的海边，穿藏青色水手服的女生站在浅水里回头，海风吹起裙摆，逆光，远处有海鸥',
+  '雨天的旧书店，短发女生坐在窗边翻书，玻璃上挂着水珠，暖黄台灯，背景书脊虚化',
+  '夜晚霓虹街头，穿机能风外套的少年撑伞奔跑，积水倒影，广角低机位，电影感',
+  '清晨雪山脚下，薄雾漫过针叶林，湖面倒映金色的山尖，长焦压缩，冷色调',
+  '从教室后门看出去，女生趴在课桌上睡觉，午后阳光斜切进画面，粉笔灰在光里漂浮，浅景深',
+  '水墨风的江南小镇，白墙黛瓦，一叶小舟穿过拱桥，细雨，留白，宣纸质感',
+  '太空站舷窗边，宇航员摘下头盔，地球在窗外发光，冷蓝光与暖橙指示灯，半身特写',
+  '银发红瞳的机械少女，左臂是黄铜齿轮义肢，穿维多利亚式长裙，站在钟楼内部，蒸汽与齿轮，仰视',
+  '深夜的公交站，女生坐在长椅上低头看手机，站牌灯箱发白，远处车灯扫过，冷色调，中景',
+  '雨夜的赛博朋克小巷，霓虹招牌倒映在积水里，穿透明雨衣的少女撑着发光伞，地面升起蒸汽，广角仰拍',
+  '白色背景，一只橘猫趴在窗台上晒太阳，柔和自然光，特写，胶片颗粒',
+  '图书馆穹顶下，穿洛丽塔裙的少女踮脚取书，光柱穿过彩窗，尘埃漂浮，广角'
+];
+
+/** 从示例池里随机抽 n 条（不重复） */
+function pickExamples(n) {
+  const pool = EXAMPLE_PROMPTS.slice();
+  const out = [];
+  const want = Math.min(Math.max(0, n | 0), pool.length);
+  while (out.length < want && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+
+/** 在按钮下方弹出示例菜单；点一条就交给 onPick */
+function showExampleMenu(btn, onPick) {
+  document.querySelectorAll('.example-pop').forEach(p => p.remove());
+  const pop = document.createElement('div');
+  pop.className = 'pop example-pop';
+  const head = document.createElement('div');
+  head.className = 'pop-head';
+  head.textContent = '示例 · 点一条填入';
+  pop.appendChild(head);
+  pickExamples(4).forEach(text => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.addEventListener('click', () => {
+      pop.remove();
+      onPick(text);
+    });
+    pop.appendChild(b);
+  });
+  document.body.appendChild(pop);
+
+  const r = btn.getBoundingClientRect();
+  pop.style.top = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 8) + 'px';
+  pop.style.left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 10) + 'px';
+}
+
+/** 给某个输入框绑定「示例」按钮 */
+function bindExamplePicker(btnId, inputId, onChange) {
+  const btn = document.getElementById(btnId);
+  const input = document.getElementById(inputId);
+  if (!btn || !input) return;
+  btn.addEventListener('click', () => {
+    showExampleMenu(btn, text => {
+      if (String(input.value).trim() && !confirm('用示例替换当前描述？')) return;
+      input.value = text;
+      input.focus();
+      if (onChange) onChange();
+      toast('已填入示例');
+    });
+  });
+}
+
+document.addEventListener('click', e => {
+  if (!e.target || !e.target.closest) return;
+  if (e.target.closest('.example-pop') || e.target.closest('#btnExample')) return;
+  document.querySelectorAll('.example-pop').forEach(p => p.remove());
+});
+
+/* ---------------------------------------------------------------- 历史统计
+ * 历史页顶部那条统计：未识别率、平均自省分、平均耗时、模式分布。
+ * 老记录没有 stats 字段，就显示「—」，不会算错。                          */
+function historyStats(list) {
+  const rows = Array.isArray(list) ? list : [];
+  let tagCount = 0, kreaCount = 0;
+  let checked = 0, unknown = 0;
+  let msSum = 0, msCount = 0;
+  let scoreSum = 0, scoreCount = 0;
+  for (const h of rows) {
+    if (!h || typeof h !== 'object') continue;
+    if (isKreaRecord(h)) kreaCount += 1; else tagCount += 1;
+    const st = h.stats || {};
+    if (!isKreaRecord(h) && st.checked > 0) {
+      checked += st.checked;
+      unknown += st.unknown || 0;
+    }
+    if (st.ms > 0) { msSum += st.ms; msCount += 1; }
+    const score = h.score != null ? h.score
+      : (h.review && h.review.final_score != null ? h.review.final_score : null);
+    if (typeof score === 'number' && isFinite(score)) { scoreSum += score; scoreCount += 1; }
+  }
+  return {
+    count: rows.length,
+    tagCount: tagCount,
+    kreaCount: kreaCount,
+    unknownRate: checked ? unknown / checked : null,
+    avgScore: scoreCount ? scoreSum / scoreCount : null,
+    avgMs: msCount ? msSum / msCount : null
+  };
+}
+
+/* ---------------------------------------------------------------- 收藏导出
+ * 生成导出文件的内容；真正下载由收藏页负责（方便测试）。                  */
+function favoritesExportPayload(list) {
+  const favs = Array.isArray(list) ? list : [];
+  return {
+    app: 'TagCraft',
+    format: 'tagcraft.favorites',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    count: favs.length,
+    favorites: favs
+  };
+}
+

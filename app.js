@@ -779,12 +779,23 @@ function renderProgress() {
 
 function pushHistory(text) {
   const list = loadHistory();
+  const st = state.stats || {};
+  const rv = state.review || {};
   list.unshift({
+    kind: 'tag',
     text: text.slice(0, 80),
     full: text,
     quality: state.quality.map(c => c.tag),
     pos: state.positive.map(c => c.tag),
     neg: state.negative.map(c => c.tag),
+    stats: {
+      llm_calls: st.model || 0,
+      tool_calls: st.tool_calls || 0,
+      checked: st.checked || 0,
+      unknown: st.unknown || 0,
+      ms: st.ms || 0
+    },
+    score: rv.final_score != null ? rv.final_score : null,
     time: new Date().toLocaleString()
   });
   saveHistory(list);
@@ -983,6 +994,7 @@ function init() {
   });
   $('btnFav').addEventListener('click', favCurrent);
   $('btnValidate').addEventListener('click', revalidate);
+  bindExamplePicker('btnExample', 'inputText', saveWork);
   $('btnQualityPreset').addEventListener('click', () => addByNames(QUALITY_PRESET, 'pos'));
   $('btnNegBase').addEventListener('click', () => addByNames(NEG_BASE, 'neg'));
   $('btnNegAnatomy').addEventListener('click', () => addByNames(NEG_ANATOMY, 'neg'));
