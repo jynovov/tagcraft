@@ -1,76 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-用一张插画生成项目图标（圆形徽章样式，只取面部）。
+用一张完整插画生成项目图标（不裁切、不做圆形徽章，整张图直接缩放到图标尺寸）。
 
 流程：
-    1. 按 CROP 坐标裁出脸部方形区域
-    2. 提一点对比度与饱和度（原图偏淡，缩到 32px 会糊）
-    3. 放大后轻度锐化，圆形取景，加一圈紫色描边
-    4. 输出 PNG + 多尺寸 ICO（小尺寸必须用 BMP 条目，见 ico_util.py）
+    1. 读取原图；不是正方形就补透明边，保证构图完整
+    2. 缩放到 512 画布（ICO 必须有多种尺寸，这一步缩放不可避免）
+    3. 输出 PNG + 多尺寸 ICO（小尺寸必须用 BMP 条目，见 ico_util.py）
 
 素材来源：
-    仓库内 assets/source_keqing_user.jpg —— 刻晴同人插画
-    刻晴是米哈游《原神》的角色，该插画版权归原作者所有；
-    MIT 许可证只覆盖本仓库的代码，不覆盖这张图。
+    assets/source_deepseek_girl.jpg —— 豆包 AI 生成的 DeepSeek 形象图
+    图片版权、DeepSeek 名称与商标归各自权利人；MIT 只覆盖代码，不覆盖这张图。
 """
 
 import os
-from collections import deque
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image
 
 from ico_util import write_ico
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
-SRC = os.path.join(ASSETS, "source_keqing_user.jpg")
+SRC = os.path.join(ASSETS, "source_deepseek_girl.jpg")
 
-S = 512                      # 输出画布（源图不大，做 512 足够，避免过度放大发虚）
-CROP = (165, 268, 425, 528)  # 只保留面部：以脸部为中心的 260×260 方形取景
-
-RING = (226, 210, 248)       # 外圈亮描边
-RING2 = (120, 78, 190)       # 外圈暗描边
-BG_EDGE = (46, 26, 78)       # 圆外底色
+S = 512                      # 输出画布边长
 
 
-def load_head():
-    im = Image.open(SRC).convert("RGBA").crop(CROP)
-    return im
-
-
-def circle_mask(size, ss=2):
-    """抗锯齿的圆形蒙版。"""
-    m = Image.new("L", (size * ss, size * ss), 0)
-    ImageDraw.Draw(m).ellipse([0, 0, size * ss - 1, size * ss - 1], fill=255)
-    return m.resize((size, size), Image.LANCZOS)
+def square(im):
+    """把任意尺寸的图放进正方形画布，居中、补透明边，不裁切。"""
+    w, h = im.size
+    side = max(w, h)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.alpha_composite(im.convert("RGBA"), ((side - w) // 2, (side - h) // 2))
+    return canvas
 
 
 def main():
-    head = load_head()
-    # 原图偏淡，提一点对比度和饱和度，缩到 32px 时才看得清五官
-    head = ImageEnhance.Color(head).enhance(1.18)
-    head = ImageEnhance.Contrast(head).enhance(1.10)
-    # 取景缩放到内圈直径
-    inner = int(S * 0.90)
-    head_big = head.resize((inner, inner), Image.LANCZOS)
-    # 源图不大，放大后轻微锐化，小尺寸下更清楚
-    head_big = head_big.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=3))
-    head_big.putalpha(circle_mask(inner))
-
-    canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    # 圆外留一圈深色，避免图标贴边显脏
-    d = ImageDraw.Draw(canvas)
-    d.ellipse([0, 0, S - 1, S - 1], fill=BG_EDGE + (255,))
-    canvas.alpha_composite(head_big, ((S - inner) // 2, (S - inner) // 2))
-
-    # 双层描边
-    d = ImageDraw.Draw(canvas)
-    r0 = (S - inner) // 2
-    d.ellipse([r0 - 8, r0 - 8, S - r0 + 7, S - r0 + 7], outline=RING2 + (255,), width=14)
-    d.ellipse([r0 - 2, r0 - 2, S - r0 + 1, S - r0 + 1], outline=RING + (245,), width=7)
-    canvas.putalpha(Image.composite(canvas.split()[3], Image.new("L", (S, S), 0),
-                                    circle_mask(S)))
+    im = square(Image.open(SRC))
+    canvas = im.resize((S, S), Image.LANCZOS)
 
     canvas.save(os.path.join(ASSETS, "tagcraft.png"))
     canvas.resize((512, 512), Image.LANCZOS).save(os.path.join(ASSETS, "tagcraft_512.png"))
