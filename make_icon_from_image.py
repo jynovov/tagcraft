@@ -9,7 +9,7 @@
     3. 输出 PNG + 多尺寸 ICO（小尺寸必须用 BMP 条目，见 ico_util.py）
 
 素材来源：
-    assets/source_deepseek_girl.jpg —— 豆包 AI 生成的 DeepSeek 形象图
+    assets/source_deepseek_girl.jpg —— AI 生成的 DeepSeek 形象图
     图片版权、DeepSeek 名称与商标归各自权利人；MIT 只覆盖代码，不覆盖这张图。
 """
 

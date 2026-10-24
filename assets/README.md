@@ -2,7 +2,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `source_deepseek_girl.jpg` | 图标素材原图（1024×1024，豆包 AI 生成） |
+| `source_deepseek_girl.jpg` | 图标素材原图（1024×1024，AI 生成） |
 | `tagcraft.ico` | 多尺寸图标：16/20/24/32/40/48/64/128 用 BMP 条目，256 用 PNG |
 | `tagcraft.png` / `tagcraft_512.png` / `tagcraft_256.png` | 成品图 |
 | `preview_sizes.png` | 16/20/32/48/64 小尺寸预览 |
@@ -30,6 +30,6 @@
 
 ## 版权说明
 
-`source_deepseek_girl.jpg` 是用豆包 AI 生成的 DeepSeek 形象图，
+`source_deepseek_girl.jpg` 是用 AI 生成的 DeepSeek 形象图，
 「DeepSeek」名称与商标归其权利人所有。
 它只作为本项目的图标使用，**不在 MIT 许可证的授权范围内**，请勿单独提取用于其他项目或商业用途。
