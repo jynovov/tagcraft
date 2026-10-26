@@ -1,0 +1,10 @@
+# 可选依赖：启用 LangChain 适配（不装也能跑，会自动退回内置实现）
+#   pip install -r requirements-langchain.txt
+#
+# 作用：
+#   1. 工具 schema 由 @tool 从函数签名自动生成，不再手写 AGENT_TOOLS
+#   2. 最终结果用 Pydantic 模型校验，字段不对会触发重写
+#
+# 不引入 langchain / langgraph，也不需要 langchain-openai：
+# 大模型请求仍然走项目自己的 urllib 传输（保留直连本机、绕系统代理的处理）。
+langchain-core>=1.0

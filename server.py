@@ -28,6 +28,8 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import lc_tools
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT, "data")
 DB_PATH = os.path.join(DATA_DIR, "dict.sqlite")
@@ -1042,6 +1044,53 @@ def run_tool(name, args):
     return "未知工具：%s" % name, "未知工具 %s" % name
 
 
+# ---------------------------------------------------------------- 工具 schema（可选 LangChain）
+# 这几个函数只用来「生成 schema」：类型注解 + docstring 交给 langchain-core，
+# 真正执行仍然走 run_tool，所以有/无 langchain 的行为完全一致。
+
+def tool_search_tags(query: str, limit: int = 8) -> str:
+    """在 33 万条 Danbooru 中英对照词表里搜索 tag，支持中文、英文、别名（例如「过膝袜」「thighhighs」）。不确定某个要素的英文写法时用它。"""
+    return run_tool("search_tags", {"query": query, "limit": limit})[0]
+
+
+def tool_get_tag(name: str) -> str:
+    """精确查询一个英文 tag 是否存在，返回分类、热度、中文名。写进提示词之前用它确认拼写。"""
+    return run_tool("get_tag", {"name": name})[0]
+
+
+def tool_validate_tags(tags: list[str]) -> str:
+    """批量校验一组 tag（一次最多 60 个），返回哪些存在、哪些不存在；不存在的会附带相近候选。"""
+    return run_tool("validate_tags", {"tags": tags})[0]
+
+
+def tool_suggest_tags(name: str) -> str:
+    """某个 tag 写法拿不准时，给出词表里最相近的几个候选。"""
+    return run_tool("suggest_tags", {"name": name})[0]
+
+
+def tool_lookup_term(query: str, limit: int = 6) -> str:
+    """查询中英术语对照（不要求是合法 tag），用于把中文概念写成英文自然语言。"""
+    return run_tool("lookup_term", {"query": query, "limit": limit})[0]
+
+
+_NOOB_TOOL_FUNCS = [("search_tags", tool_search_tags), ("get_tag", tool_get_tag),
+                    ("validate_tags", tool_validate_tags), ("suggest_tags", tool_suggest_tags)]
+_KREA_TOOL_FUNCS = [("lookup_term", tool_lookup_term)]
+_tool_payload_cache = {}
+
+
+def tool_payload(natural=False):
+    """返回发给模型的 tools 数组：装了 langchain-core 就自动生成，否则用内置定义。"""
+    if not lc_tools.HAS_LC:
+        return KREA_TOOLS if natural else AGENT_TOOLS
+    key = "krea" if natural else "noob"
+    if key not in _tool_payload_cache:
+        funcs = _KREA_TOOL_FUNCS if natural else _NOOB_TOOL_FUNCS
+        _tool_payload_cache[key] = lc_tools.build_payload(funcs)
+    return _tool_payload_cache[key]
+
+
+
 def _pick_tag_lists(parsed):
     pos = [str(t).strip() for t in ((parsed or {}).get("positive") or []) if str(t).strip()]
     neg = [str(t).strip() for t in ((parsed or {}).get("negative") or []) if str(t).strip()]
@@ -1177,7 +1226,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         payload = {"model": model, "messages": messages,
                    "temperature": float(temperature), "stream": False}
         if tools_ok:
-            payload["tools"] = KREA_TOOLS if natural else AGENT_TOOLS
+            payload["tools"] = tool_payload(natural)
             payload["tool_choice"] = "auto"
         call_no[0] += 1
         say("第 %d/%d 轮：正在请求模型…" % (rnd, max_r), gen_pct(0.05))
@@ -1204,6 +1253,9 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         if not calls:
             content = msg.get("content") or ""
             parsed = _extract_json(content)
+            if parsed and not natural:
+                # 装了 langchain-core：用 Pydantic 模型再校一遍，字段不对就当解析失败
+                parsed = lc_tools.validate_tag_dict(parsed)
             if natural and not parsed and content.strip():
                 # Krea 2 的模型（尤其本地模型）经常直接吐一段英文散文，
                 # 这本来就是想要的格式，所以不再逼它套 JSON。
@@ -1266,6 +1318,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         except Exception:
             content = ""
         parsed = _extract_json(content)
+        if parsed and not natural:
+            parsed = lc_tools.validate_tag_dict(parsed)
         if natural and not parsed and content.strip():
             parsed = {"prompt": content, "negative": "", "notes": ""}
 
@@ -1858,6 +1912,8 @@ class Handler(BaseHTTPRequestHandler):
                 "categories": CATEGORY_NAMES,
                 "sources": [{"key": k, "label": v["label"]} for k, v in SOURCES.items()],
                 "default_source": DEFAULT_SOURCE,
+                "langchain": {"enabled": lc_tools.HAS_LC,
+                              "version": lc_tools.VERSION},
             })
 
         if path == "/api/dict/search":
@@ -2186,6 +2242,9 @@ def main():
         return
 
     url = "http://%s:%d/" % (args.host, port)
+    log("LangChain 适配：%s" % (
+        ("已启用（langchain-core %s）" % lc_tools.VERSION) if lc_tools.HAS_LC
+        else "未启用，使用内置实现"))
     log("服务已启动：%s（词表 %d 条）" % (url, dict_count()))
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

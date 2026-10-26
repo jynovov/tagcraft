@@ -190,7 +190,6 @@ python server.py
 - 大模型：OpenAI 兼容协议，由本地服务代理转发（绕开跨域、Key 可只写在本机 `config.json`）；按 `prompt_model` 选择「tag 档案」或「Krea 2 自然语言档案」（系统提示词、工具、自省标准三件套一起换）
 - ComfyUI：服务端读设置里粘贴的 API 格式工作流，把正/负提示词写进 `CLIPTextEncode` 节点的 `inputs.text`，再 POST 到 `/prompt` 排队（节点按原有提示词自动判断正负）
 - 启动器：C# 编译的 exe，图标写进 PE 资源；启动前**逐个实测**候选 Python 是否可用（PATH 里的应用商店别名会被跳过）
-- 图标：小尺寸必须用 BMP 条目写入 ICO，否则资源管理器会显示成白纸（见 `ico_util.py`）
 
 ## 项目结构
 
@@ -207,8 +206,8 @@ tagcraft/
 ├── common.js / style.css         共用脚本（侧边栏 / 模式切换 / 按钮动效）与暖色主题
 ├── launcher.cs / build.bat       启动器源码与编译脚本
 ├── start.bat                     命令行启动（备用）
-├── make_icon_from_image.py       图标生成脚本
-├── ico_util.py                   手写 ICO 容器
+├── lc_tools.py                   可选：LangChain 适配（工具 schema / 结构化校验）
+├── requirements-langchain.txt    可选依赖（langchain-core）
 ├── tests/smoke_test.py           冒烟测试（服务端 + 页面）
 ├── tests/agent_test.py           智能体测试（自带假大模型，免 Key）
 ├── tests/krea_test.py            Krea2 模式测试（自然语言链路，免 Key）
@@ -220,12 +219,31 @@ tagcraft/
 ├── tests/ui_krea_test.js         Krea2 页逻辑测试（独立草稿箱 / 词数 / 记录互通）
 ├── tests/progress_e2e_test.js    进度条端到端测试（真实服务 + 真实前端逻辑）
 ├── tests/krea_e2e_test.js        Krea2 端到端测试（生成 → 进度 → 自省 → 填回界面）
+├── tests/lc_tools_test.py        LangChain 适配测试（没装依赖时自动跳过）
 ├── docs/                         中文文档
 ├── assets/                       图标（含版权说明，见其 README）
 └── data/
     ├── seed_tags.csv             内置种子词表（离线兜底）
     └── （词表缓存与 SQLite 首次运行自动生成，不提交）
 ```
+
+## 可选：LangChain 适配（langchain-core）
+
+项目**默认零依赖**；装了 `langchain-core` 后自动切到 LangChain 写法，没装则完全退回内置实现，功能不受影响。
+
+```bat
+pip install -r requirements-langchain.txt
+```
+
+启用后多出两件事：
+
+- 四个工具（`search_tags` / `get_tag` / `validate_tags` / `suggest_tags`）的 schema 由函数签名和 docstring **自动生成**，不再手写 `AGENT_TOOLS`
+- 最终结果用 Pydantic `TagResult` 校验，字段类型不对会触发重写，而不是直接透传
+
+刻意**不引入**：`langchain`（含 langgraph）、`langchain-openai`。
+大模型请求仍然走项目自己的 `urllib` 传输，保留“直连本机、绕开系统代理”的处理，所以不需要 openai SDK。
+
+工具执行依然走 `run_tool`，两条路径行为一致；`tests/lc_tools_test.py` 会校验自动生成的 schema 与内置定义完全一致。
 
 ## 文档
 

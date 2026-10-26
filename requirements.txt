@@ -1,4 +1,7 @@
 # 本项目只用 Python 标准库，没有任何第三方依赖。
 # 这个文件留空是故意的：方便 pip install -r requirements.txt 不报错。
 #
+# 可选：想启用 LangChain 适配（工具 schema 自动生成 / 结构化校验），
+# 另装 requirements-langchain.txt 里的 langchain-core。
+#
 # 运行环境要求：Python 3.10 或更高版本。
