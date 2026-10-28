@@ -80,6 +80,12 @@ KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模
 - 是否夹带了画面里没有的内容、对白、心理活动
 - 长度是否在 60~120 个英文单词之间；太笼统就补细节，太啰嗦就删重复
 
+【改写规则】（最重要）
+- 只修改 problems / missing 指出的项；其余 tag 原样保留、顺序不变；不要重新组织整段。
+- 自然语言模式下把「tag」理解为当前提示词里的句子成分：只改被点名的部分，
+  其余措辞与顺序保持原样，不要整段重写。
+- 没被点名的内容，哪怕你觉得还能更好，也不要动。
+
 【评分锚点】（拿不准分数时对照这两段校准）
 · 约 60 分：主体和海边黄昏都写到了，但漏掉「回头看向镜头」，句子像 tag 拼接、
   还夹了一句心理描写，90 词里有一半是空泛形容词。
@@ -190,6 +196,11 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 - 有没有模型不认识的自造词；有没有把「背景/场景」类 tag 排到人物前面
 - 数量是否合理（正向 25~45 个，负向 4~12 个）
 
+【改写规则】（最重要）
+- 只修改 problems / missing 指出的项；其余 tag 原样保留、顺序不变；不要重新组织整段。
+- 没被点名的 tag，哪怕你觉得还能更好，也不要增删、换位或改写。
+- 宁可少改，也不要为了「看起来更整齐」而重排整段。
+
 【评分锚点】（拿不准分数时对照这两段校准）
 · 约 60 分：主体和场景都在，但漏了「回头看向镜头」，混进 3 个词表查不到的自造词，
   发色和瞳色互相矛盾，正向只给 18 个偏少。
@@ -283,6 +294,14 @@ KREA_DIM_WEIGHTS = {
 
 _DIM_MAX = 5
 _DIM_SCORE_SCALE = 100.0 / _DIM_MAX
+
+
+# ---- 自省（评审 / 改写）策略 ----
+# 新一轮分数相对「当前最高分」涨不到 3 分就停止后续改写，避免越改越低。
+# 首次评审还没有最高分，不触发；负增长同样按这条停（best 不变）。
+_REFLECT_MIN_GAIN = 3
+# 评审 / 改写轮统一用低温，减少「重写后变差」；生成轮的温度不受影响。
+_REFLECT_TEMPERATURE = 0.25
 
 
 def _clamp_dim(value):
@@ -1120,13 +1139,15 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
         report = "词表校验：%d 个 tag 里 %d 个不在词表：%s" % (
             len(pos) + len(neg), len(bad), "、".join(bad) or "无")
         ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n"
-               "【当前负向 tag】\n%s\n\n【%s】\n\n请审核并输出 JSON。"
+               "【当前负向 tag】\n%s\n\n【%s】\n\n"
+               "【改写要求】只修改 problems / missing 指出的项；其余 tag 原样保留、"
+               "顺序不变；不要重新组织整段。\n\n请审核并输出 JSON。"
                % (text, ", ".join(pos), ", ".join(neg), report))
         body = _post_chat(cfg, {
             "model": model,
             "messages": [{"role": "system", "content": CRITIC_SYSTEM},
                          {"role": "user", "content": ask}],
-            "temperature": 0.2, "stream": False,
+            "temperature": _REFLECT_TEMPERATURE, "stream": False,
         }, retries=3)
         result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
         try:
@@ -1151,6 +1172,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
         new_pos = [str(t).strip() for t in (crit.get("positive") or []) if str(t).strip()]
         new_neg = [str(t).strip() for t in (crit.get("negative") or []) if str(t).strip()]
         changed = 0
+        # 本轮分数相对「当前最高分」的增益；首次评审还没有最高分 → 不触发早停
+        gain = None if best["score"] < 0 else score - best["score"]
         if new_pos or new_neg:
             old = set(pos) | set(neg)
             new = set(new_pos) | set(new_neg)
@@ -1174,9 +1197,15 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             % (i, max(1, int(rounds)), score if score is not None else "—", changed),
             66.0 + i * 28.0 / max(1, int(rounds)))
         # 收敛条件：分数够高、或这一轮没改动
-        if score >= threshold or changed == 0:
-            if score >= threshold:
-                say("分数达到 %d，自省收敛" % threshold, 95)
+        if score >= threshold:
+            say("分数达到 %d，自省收敛" % threshold, 95)
+            break
+        if changed == 0:
+            break
+        # 增量不足 3 分（含负增长）→ 后面的改写大概率只会更差，提前停
+        if gain is not None and gain < _REFLECT_MIN_GAIN:
+            say("第 %d 轮增益 %+d 分（不足 %d 分），停止后续改写"
+                % (i, gain, _REFLECT_MIN_GAIN), 95)
             break
 
     # 回退到得分最高的那一轮（低分轮只留在历史里，不覆盖最终结果）
@@ -1220,13 +1249,15 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
             66.0 + (i - 1) * 28.0 / rounds)
         cur = result.get("prompt") or ""
         ask = ("【中文描述】\n%s\n\n【当前英文提示词】\n%s\n\n"
-               "【长度】%d 个英文单词\n\n请审核并输出 JSON。"
+               "【长度】%d 个英文单词\n\n"
+               "【改写要求】只修改 problems / missing 指出的项；其余内容原样保留、"
+               "顺序不变；不要重新组织整段。\n\n请审核并输出 JSON。"
                % (text, cur, word_count(cur)))
         body = _post_chat(cfg, {
             "model": model,
             "messages": [{"role": "system", "content": KREA_CRITIC_SYSTEM},
                          {"role": "user", "content": ask}],
-            "temperature": 0.2, "stream": False,
+            "temperature": _REFLECT_TEMPERATURE, "stream": False,
         }, retries=3)
         result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
         try:
@@ -1251,6 +1282,8 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
             break
         new_prompt = _clean_prompt(crit.get("prompt") or crit.get("positive") or "")
         changed = 0
+        # 本轮分数相对「当前最高分」的增益；首次评审还没有最高分 → 不触发早停
+        gain = None if best["score"] < 0 else score - best["score"]
         if new_prompt and new_prompt != cur:
             result["prompt"] = new_prompt
             changed += 1
@@ -1265,9 +1298,15 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
         say("自省第 %d/%d 轮：%s 分，改动 %d 处"
             % (i, rounds, score if score is not None else "—", changed),
             66.0 + i * 28.0 / rounds)
-        if score >= threshold or changed == 0:
-            if score >= threshold:
-                say("分数达到 %d，自省收敛" % threshold, 95)
+        if score >= threshold:
+            say("分数达到 %d，自省收敛" % threshold, 95)
+            break
+        if changed == 0:
+            break
+        # 增量不足 3 分（含负增长）→ 后面的改写大概率只会更差，提前停
+        if gain is not None and gain < _REFLECT_MIN_GAIN:
+            say("第 %d 轮增益 %+d 分（不足 %d 分），停止后续改写"
+                % (i, gain, _REFLECT_MIN_GAIN), 95)
             break
 
     # 回退到得分最高的那一轮（低分轮只留在历史里，不覆盖最终提示词）
