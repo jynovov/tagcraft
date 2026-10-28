@@ -73,6 +73,27 @@ KREA_PROMPT_V2 = (KREA_PROMPT_V1 + " Soft rim light outlines her hair, a gentle 
                   "muted orange and violet sky.")
 
 
+# 自省分项剧本：分项与 score 一起给（展示用），另有只给分项 / 都不给的降级剧本
+TAG_DIMS_LOW = {"coverage": 3, "validity": 4, "ordering": 4,
+                "redundancy": 4, "constraints": 4}
+TAG_DIMS_HIGH = {"coverage": 5, "validity": 5, "ordering": 4,
+                 "redundancy": 5, "constraints": 5}
+TAG_DIMS_VERY_LOW = {"coverage": 3, "validity": 3, "ordering": 2,
+                     "redundancy": 2, "constraints": 3}
+KREA_DIMS_LOW = {"coverage": 3, "fidelity": 3, "readability": 4,
+                 "constraints": 3, "consistency": 3}
+KREA_DIMS_HIGH = {"coverage": 5, "fidelity": 5, "readability": 4,
+                  "constraints": 5, "consistency": 5}
+KREA_DIMS_VERY_LOW = {"coverage": 3, "fidelity": 3, "readability": 3,
+                      "constraints": 3, "consistency": 3}
+# 只给分项时，按权重折算：tag 4.75/5 = 95 分、krea 也是 95 分
+DIMS_ONLY_TAG = {"coverage": 5, "validity": 5, "ordering": 4,
+                 "redundancy": 4, "constraints": 5}
+DIMS_ONLY_KREA = {"coverage": 5, "fidelity": 5, "readability": 4,
+                  "constraints": 5, "consistency": 4}
+
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -159,46 +180,73 @@ class Handler(BaseHTTPRequestHandler):
         if is_critic:
             done = CRITIC_DONE.get(model, 0)
             CRITIC_DONE[model] = done + 1
+            if "dims-only" in model.lower():
+                # 只给分项不给 score：服务端要用权重折算（tag/krea 都折成 95 分）
+                if natural:
+                    return reply(json.dumps({
+                        "dimensions": DIMS_ONLY_KREA,
+                        "problems": ["只给了分项"], "missing": [],
+                        "prompt": KREA_PROMPT_V2,
+                    }, ensure_ascii=False))
+                return reply(json.dumps({
+                    "dimensions": DIMS_ONLY_TAG,
+                    "problems": ["只给了分项"], "missing": [],
+                    "positive": ["masterpiece", "best_quality", "1girl", "solo", "thighhighs",
+                                 "school_uniform", "sunset", "orange_sky", "looking_back"],
+                    "negative": ["worst_quality", "low_quality", "blurry"],
+                }, ensure_ascii=False))
+            if "no-score" in model.lower():
+                # score 和分项都没给：这一轮评审作废，但生成结果要照常返回
+                return reply(json.dumps({
+                    "problems": ["这次不给分数"], "missing": [],
+                    "positive": ["masterpiece", "1girl", "solo"],
+                    "negative": ["worst_quality"],
+                }, ensure_ascii=False))
             if natural:
                 if drop:
                     if done == 0:
                         return reply(json.dumps({
-                            "score": 90, "problems": ["还可以更具体"], "missing": [],
+                            "score": 90, "dimensions": KREA_DIMS_HIGH,
+                            "problems": ["还可以更具体"], "missing": [],
                             "prompt": "A lone girl on a dusk beach, HIGH_SCORE_PROMPT, "
                                       "warm backlight, 35mm lens, cinematic illustration.",
                         }, ensure_ascii=False))
                     return reply(json.dumps({
-                        "score": 70, "problems": ["改坏了"], "missing": [],
+                        "score": 70, "dimensions": KREA_DIMS_VERY_LOW,
+                        "problems": ["改坏了"], "missing": [],
                         "prompt": "A girl, LOW_SCORE_PROMPT.",
                     }, ensure_ascii=False))
                 if done == 0:
                     return reply(json.dumps({
-                        "score": 78,
+                        "score": 78, "dimensions": KREA_DIMS_LOW,
                         "problems": ["提示词偏笼统，缺少光比和氛围细节"],
                         "missing": ["没有体现海风与天色渐变"],
                         "prompt": KREA_PROMPT_V2,
                     }, ensure_ascii=False))
                 return reply(json.dumps({
-                    "score": 95, "problems": [], "missing": [],
+                    "score": 95, "dimensions": KREA_DIMS_HIGH,
+                    "problems": [], "missing": [],
                     "prompt": KREA_PROMPT_V2,
                 }, ensure_ascii=False))
             if drop:
                 if done == 0:
                     return reply(json.dumps({
-                        "score": 90, "problems": ["高分版本"], "missing": [],
+                        "score": 90, "dimensions": TAG_DIMS_HIGH,
+                        "problems": ["高分版本"], "missing": [],
                         "positive": ["masterpiece", "best_quality", "1girl", "solo",
                                      "orange_sky", "looking_back"],
                         "negative": ["worst_quality", "low_quality"],
                     }, ensure_ascii=False))
                 return reply(json.dumps({
-                    "score": 70, "problems": ["低分版本"], "missing": [],
+                    "score": 70, "dimensions": TAG_DIMS_VERY_LOW,
+                    "problems": ["低分版本"], "missing": [],
                     "positive": ["masterpiece", "best_quality", "1girl", "solo",
                                  "grey_hair", "looking_away"],
                     "negative": ["worst_quality", "blurry"],
                 }, ensure_ascii=False))
             if done == 0:
                 return reply(json.dumps({
-                    "score": 78,
+                    "score": 78, "dimensions": TAG_DIMS_LOW,
                     "problems": ["zzz_fake_tag_zzz 不在词表里"],
                     "missing": ["没有体现黄昏的光线"],
                     "positive": ["masterpiece", "best_quality", "1girl", "solo", "thighhighs",
@@ -206,7 +254,8 @@ class Handler(BaseHTTPRequestHandler):
                     "negative": ["worst_quality", "low_quality", "blurry"],
                 }, ensure_ascii=False))
             return reply(json.dumps({
-                "score": 95, "problems": [], "missing": [],
+                "score": 95, "dimensions": TAG_DIMS_HIGH,
+                "problems": [], "missing": [],
                 "positive": ["masterpiece", "best_quality", "1girl", "solo", "thighhighs",
                              "school_uniform", "sunset", "orange_sky", "looking_back"],
                 "negative": ["worst_quality", "low_quality", "blurry"],

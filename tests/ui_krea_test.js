@@ -85,7 +85,12 @@ state.prompt = WORDY;
 state.warnings = ['出现了权重语法，Krea 2 不需要'];
 state.stats = { model: 4, tool_calls: 1, words: 28, ms: 5200 };
 state.trace = [{ round: 1, tool: 'lookup_term', args: {}, summary: '术语查「过膝袜」' }];
-state.review = { rounds: [{ round: 1, score: 95, changed: 1 }], final_score: 95, iterations: 1 };
+state.review = { rounds: [{ round: 1, score: 95, changed: 1,
+    dimensions: { coverage: 5, fidelity: 5, readability: 4,
+                  constraints: 5, consistency: 4 } }],
+  final_score: 95, final_dims: { coverage: 5, fidelity: 5, readability: 4,
+                                 constraints: 5, consistency: 4 },
+  picked_round: 1, iterations: 1 };
 state.plan = { elements: ['黄昏海边'], queries: ['over-the-knee socks'] };
 render();
 chk('英文提示词写进输出框', document.getElementById('outPrompt').value === WORDY);
@@ -104,6 +109,12 @@ chk('Krea2 轨迹里概念核对显示「不适用」',
     document.getElementById('trace').innerHTML.indexOf('不适用') >= 0);
 chk('自省分数渲染出来',
     document.getElementById('reviewSum').textContent.indexOf('95') >= 0);
+const kreaDimHtml = document.getElementById('review').innerHTML;
+chk('自省面板显示 Krea 分项（覆盖 5/5 · 贴合 5/5 · 可读 4/5 · 约束 5/5 · 一致 4/5）',
+    kreaDimHtml.indexOf('覆盖 5/5') >= 0 && kreaDimHtml.indexOf('贴合 5/5') >= 0 &&
+    kreaDimHtml.indexOf('可读 4/5') >= 0 && kreaDimHtml.indexOf('约束 5/5') >= 0 &&
+    kreaDimHtml.indexOf('一致 4/5') >= 0, kreaDimHtml);
+chk('Krea 分项不混入 tag 模式的维度名', kreaDimHtml.indexOf('有效 ') < 0);
 const saved1 = JSON.parse(localStorage.getItem('tagcraft.krea.cur'));
 chk('描述与提示词写进唯一一份',
     saved1.text === '黄昏海边女生回头' && saved1.prompt === WORDY);

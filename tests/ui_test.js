@@ -302,11 +302,12 @@ chk('导出格式标记正确',
 chk('导出条数正确', payload.count === 2 && payload.favorites.length === 2);
 chk('导出带导出时间', typeof payload.exportedAt === 'string' && payload.exportedAt.length > 10);
 
-/* ---------- 16. 自省取最高分 ---------- */
+/* ---------- 16. 自省：取最高分 + 分项展示 ---------- */
+const TAG_DIMS_UI = { coverage: 4, validity: 5, ordering: 4, redundancy: 5, constraints: 5 };
 state.review = {
-  rounds: [{ round: 1, score: 90, changed: 1, problems: [] },
+  rounds: [{ round: 1, score: 90, changed: 1, problems: [], dimensions: TAG_DIMS_UI },
            { round: 2, score: 70, changed: 2, problems: [] }],
-  final_score: 90, picked_round: 1, iterations: 2
+  final_score: 90, final_dims: TAG_DIMS_UI, picked_round: 1, iterations: 2
 };
 renderReview();
 chk('自省摘要显示采用第 1 轮',
@@ -316,6 +317,29 @@ chk('高分轮带「采用」标记',
     document.getElementById('review').innerHTML.indexOf('class="pick"') >= 0);
 chk('两轮评分都还在历史里',
     document.getElementById('review').innerHTML.indexOf('70 分') >= 0);
+const rvHtml = document.getElementById('review').innerHTML;
+chk('自省面板显示分项（覆盖 4/5 · 有效 5/5 · 排序 4/5 · 冗余 5/5 · 约束 5/5）',
+    rvHtml.indexOf('覆盖 4/5') >= 0 && rvHtml.indexOf('有效 5/5') >= 0 &&
+    rvHtml.indexOf('排序 4/5') >= 0 && rvHtml.indexOf('冗余 5/5') >= 0 &&
+    rvHtml.indexOf('约束 5/5') >= 0, rvHtml);
+chk('没分项的那轮不会渲染出 NaN/undefined',
+    rvHtml.indexOf('NaN') < 0 && rvHtml.indexOf('undefined') < 0);
+
+state.review = { rounds: [{ round: 1, score: 88, changed: 1 }], final_score: 88,
+                 final_dims: { coverage: 3, validity: 4, ordering: 3,
+                               redundancy: 4, constraints: 4 },
+                 picked_round: 1, iterations: 1 };
+renderReview();
+chk('老记录只有 final_dims 时也能兜底显示分项',
+    document.getElementById('review').innerHTML.indexOf('有效 4/5') >= 0 &&
+    document.getElementById('review').innerHTML.indexOf('采用轮分项') >= 0,
+    document.getElementById('review').innerHTML);
+chk('分项为 null 时不崩', (function () {
+  state.review = { rounds: [{ round: 1, score: 80, changed: 0, dimensions: null }],
+                   final_score: 80, final_dims: null, picked_round: 1, iterations: 1 };
+  renderReview();
+  return document.getElementById('review').innerHTML.indexOf('覆盖') < 0;
+})());
 
 /* ---------- 17. 严格查词开关（默认开，单独一个键） ---------- */
 localStorage.clear();

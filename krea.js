@@ -258,14 +258,22 @@ function renderReview() {
       ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
     const miss = (r.missing || []).length
       ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
+    const dims = reviewDimLine(r.dimensions);
     return `<div class="step">
         <span class="rnd">${i + 1}</span>
         <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
         <span class="sum">改动 ${r.changed || 0} 处${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
         ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
+        ${dims ? '<div class="dims">' + dims + '</div>' : ''}
         ${probs}${miss}
       </div>`;
-  }).join('');
+  }).join('') + (() => {
+    // 老记录或评审没给分项时，兜底用最终采用那轮的分项（服务端 final_dims）
+    if (rounds.some(r => reviewDimLine(r.dimensions))) return '';
+    const line = reviewDimLine(rv.final_dims);
+    return line ? '<div class="step"><span class="rnd">·</span>' +
+      '<span class="sum">采用轮分项</span><div class="dims">' + line + '</div></div>' : '';
+  })();
 }
 
 /* ---------------------------------------------------------------- 生成 */

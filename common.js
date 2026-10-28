@@ -530,6 +530,23 @@ function historyStats(list) {
   };
 }
 
+/* ---------------------------------------------------------------- 自省分项
+ * 评审每轮可以带 dimensions（服务端给 0~5 的整数）：tag 模式是
+ * 覆盖/有效/排序/冗余/约束，Krea2 是 覆盖/贴合/可读/约束/一致。
+ * 这里只负责把对象拼成一行中文，缺项/非数字直接跳过，不会渲染出 NaN。 */
+const DIM_LABELS = {
+  coverage: '覆盖', validity: '有效', ordering: '排序',
+  redundancy: '冗余', constraints: '约束',
+  fidelity: '贴合', readability: '可读', consistency: '一致'
+};
+
+function reviewDimLine(dims) {
+  if (!dims || typeof dims !== 'object') return '';
+  const keys = Object.keys(dims).filter(k => typeof dims[k] === 'number' && isFinite(dims[k]));
+  if (!keys.length) return '';
+  return keys.map(k => (DIM_LABELS[k] || k) + ' ' + dims[k] + '/5').join(' · ');
+}
+
 /* ---------------------------------------------------------------- 列表分页
  * 页码只存在页面内的变量里（不写 localStorage）；数据一变就重新夹紧到有效页。 */
 function pageCount(total, perPage) {

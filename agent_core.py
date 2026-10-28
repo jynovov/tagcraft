@@ -62,6 +62,13 @@ KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模
 请严格审核，并只输出一个 JSON（不要解释、不要代码块）：
 {
   "score": 0-100 的整数（要素覆盖度、英文自然度、画面可画性、长度是否合适）,
+  "dimensions": {
+    "coverage": 0-5 整数（要素覆盖：中文描述里的关键要素写进去多少）,
+    "fidelity": 0-5 整数（贴合描述：有没有编造画面里没有的内容）,
+    "readability": 0-5 整数（自然可读：是连贯英文句子，不是 tag 堆砌）,
+    "constraints": 0-5 整数（长度 60~120 词、无权重语法/下划线/代码块）,
+    "consistency": 0-5 整数（无矛盾：光线、时间、服装、人数前后一致）
+  },
   "problems": ["具体问题，最多 5 条，没有就空数组"],
   "missing": ["中文描述里有、但提示词没体现的要素，最多 5 条"],
   "prompt": "修正后的英文提示词（一整段自然语言）"
@@ -72,6 +79,15 @@ KREA_CRITIC_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模
 - 是不是写成了 tag 堆砌、下划线、或者带权重的写法（这是错的，必须改成句子）
 - 是否夹带了画面里没有的内容、对白、心理活动
 - 长度是否在 60~120 个英文单词之间；太笼统就补细节，太啰嗦就删重复
+
+【评分锚点】（拿不准分数时对照这两段校准）
+· 约 60 分：主体和海边黄昏都写到了，但漏掉「回头看向镜头」，句子像 tag 拼接、
+  还夹了一句心理描写，90 词里有一半是空泛形容词。
+  分项大致：覆盖 3、贴合 2、可读 3、约束 3、一致 3。
+· 约 90 分：主体/服装/表情动作/场景/光线/镜头齐全，读起来是连贯的英文散文，
+  没有画面外的内容，长度约 85 词且前后不打架。
+  分项大致：覆盖 5、贴合 5、可读 4、约束 5、一致 5。
+
 如果你认为已经足够好，可以把 prompt 原样返回，并给出高分。
 """
 
@@ -155,6 +171,13 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 请严格审核，并只输出一个 JSON（不要解释、不要代码块）：
 {
   "score": 0-100 的整数（综合评分：要素覆盖度、tag 有效性、排序合理性、有无矛盾或冗余）,
+  "dimensions": {
+    "coverage": 0-5 整数（要素覆盖：中文描述里的关键要素覆盖了多少）,
+    "validity": 0-5 整数（tag 有效：是否都在词表里、有没有自造词）,
+    "ordering": 0-5 整数（排序：人物/外貌/表情动作是否在背景、风格之前）,
+    "redundancy": 0-5 整数（冗余：有没有重复或互相矛盾的 tag）,
+    "constraints": 0-5 整数（约束：正向 25~45 个、负向 4~12 个、格式与权重写法）
+  },
   "problems": ["具体问题，最多 5 条，没有就空数组"],
   "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条"],
   "positive": ["修正后的正向 tag，按重要性从高到低"],
@@ -166,6 +189,15 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 - 有没有互相矛盾或重复的 tag（如同时 solo 和 2girls、短发和长发）
 - 有没有模型不认识的自造词；有没有把「背景/场景」类 tag 排到人物前面
 - 数量是否合理（正向 25~45 个，负向 4~12 个）
+
+【评分锚点】（拿不准分数时对照这两段校准）
+· 约 60 分：主体和场景都在，但漏了「回头看向镜头」，混进 3 个词表查不到的自造词，
+  发色和瞳色互相矛盾，正向只给 18 个偏少。
+  分项大致：覆盖 3、有效 2、排序 3、冗余 2、约束 2。
+· 约 90 分：人数/外貌/服装/表情动作/场景/光线都在，tag 全部词表可查，
+  主体在前背景在后，没有重复矛盾，正向 32 个、负向 6 个。
+  分项大致：覆盖 5、有效 5、排序 4、冗余 5、约束 5。
+
 如果你认为已经足够好，可以把 positive/negative 原样返回，并给出高分。
 """
 
@@ -230,6 +262,86 @@ CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的�
 _PLAN_MAX_ELEMENTS = 12
 _PLAN_MAX_QUERIES = 10
 _CONCEPT_MAX = 25
+
+
+# ---- 自省分项：每项 0~5 整数，服务端按权重折算成 0~100 ----
+# 模型自己给了 score 时以模型为准（保持既有阈值逻辑）；没给才用分项折算。
+TAG_DIM_WEIGHTS = {
+    "coverage": 0.35,     # 要素覆盖
+    "validity": 0.25,     # tag 有效 / 无自造
+    "ordering": 0.15,     # 排序
+    "redundancy": 0.10,   # 无重复 / 矛盾
+    "constraints": 0.15,  # 数量与格式约束
+}
+KREA_DIM_WEIGHTS = {
+    "coverage": 0.35,     # 要素覆盖
+    "fidelity": 0.30,     # 贴合描述
+    "readability": 0.15,  # 自然可读
+    "constraints": 0.10,  # 长度 / 格式
+    "consistency": 0.10,  # 无矛盾
+}
+
+_DIM_MAX = 5
+_DIM_SCORE_SCALE = 100.0 / _DIM_MAX
+
+
+def _clamp_dim(value):
+    """单个分项夹到 0~5 的整数；不是数字（含 NaN/inf）时返回 None。"""
+    if isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num != num or num in (float("inf"), float("-inf")):
+        return None
+    return int(max(0, min(_DIM_MAX, int(round(num)))))
+
+
+def _normalize_dimensions(raw, weights):
+    """把模型给的 dimensions 规整成 {分项: 0~5 整数}。
+
+    宽容处理：不是 dict 当没给；缺项按 0 分补（不能因为模型漏写一项就崩，
+    也不能悄悄当成满分）；超范围夹取。一项可用的都没有 → None。
+    """
+    if not isinstance(raw, dict):
+        return None
+    dims = {}
+    seen = False
+    for key in weights:
+        val = _clamp_dim(raw.get(key))
+        if val is not None:
+            seen = True
+        dims[key] = 0 if val is None else val
+    return dims if seen else None
+
+
+def _score_from_dimensions(dims, weights):
+    """按权重把分项折算成 0~100 整数；dims 不可用时返回 None。"""
+    if not isinstance(dims, dict):
+        return None
+    total = 0.0
+    for key, weight in weights.items():
+        total += float(dims.get(key) or 0) * weight
+    total = max(0.0, min(float(_DIM_MAX), total))
+    return int(round(total * _DIM_SCORE_SCALE))
+
+
+def _review_score(crit, weights):
+    """本轮评审的 (score, dimensions)。
+
+    score 优先用模型给的（保持既有语义：只做 int 转换，不额外夹取）；
+    模型没给 score 时用分项折算；两者都没有 → (None, None)，视为本轮评审失败。
+    """
+    crit = crit if isinstance(crit, dict) else {}
+    dims = _normalize_dimensions(crit.get("dimensions"), weights)
+    try:
+        score = int(crit.get("score"))
+    except (TypeError, ValueError):
+        score = None
+    if score is None and dims is not None:
+        score = _score_from_dimensions(dims, weights)
+    return score, dims
 
 
 def _clean_plan(parsed):
@@ -995,7 +1107,7 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
     model = (cfg.get("model") or "").strip()
     history = []
     # 多轮评审里分数可能回落，最后要采用「得分最高」的那一轮结果
-    best = {"score": -1, "round": None, "positive": None,
+    best = {"score": -1, "round": None, "dimensions": None, "positive": None,
             "positive_unknown": None, "negative": None, "negative_unknown": None}
 
     for i in range(1, max(1, int(rounds)) + 1):
@@ -1023,14 +1135,19 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             content = ""
         crit = _extract_json(content)
         if not crit:
-            history.append({"round": i, "score": None, "problems": ["评审没返回 JSON"], "changed": 0})
+            history.append({"round": i, "score": None, "dimensions": None,
+                            "problems": ["评审没返回 JSON"], "changed": 0})
             break
 
-        score = crit.get("score")
-        try:
-            score = int(score)
-        except Exception:
-            score = None
+        score, dims = _review_score(crit, TAG_DIM_WEIGHTS)
+        if score is None:
+            # 既没给 score 也没有可用分项 → 这轮评审作废（沿用原有降级逻辑）
+            history.append({"round": i, "score": None, "dimensions": dims,
+                            "problems": ((crit.get("problems") or [])[:5]
+                                         or ["评审没给分数"]),
+                            "missing": (crit.get("missing") or [])[:5],
+                            "changed": 0})
+            break
         new_pos = [str(t).strip() for t in (crit.get("positive") or []) if str(t).strip()]
         new_neg = [str(t).strip() for t in (crit.get("negative") or []) if str(t).strip()]
         changed = 0
@@ -1043,11 +1160,12 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             result["positive"], result["positive_unknown"] = valid, unknown
             result["negative"], result["negative_unknown"] = valid_n, unknown_n
         history.append({"round": i, "score": score,
+                        "dimensions": dims,
                         "problems": (crit.get("problems") or [])[:5],
                         "missing": (crit.get("missing") or [])[:5],
                         "changed": changed})
-        if score is not None and score > best["score"]:
-            best = {"score": score, "round": i,
+        if score > best["score"]:
+            best = {"score": score, "round": i, "dimensions": dims,
                     "positive": result["positive"],
                     "positive_unknown": result["positive_unknown"],
                     "negative": result["negative"],
@@ -1056,8 +1174,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             % (i, max(1, int(rounds)), score if score is not None else "—", changed),
             66.0 + i * 28.0 / max(1, int(rounds)))
         # 收敛条件：分数够高、或这一轮没改动
-        if (score is not None and score >= threshold) or changed == 0:
-            if score is not None and score >= threshold:
+        if score >= threshold or changed == 0:
+            if score >= threshold:
                 say("分数达到 %d，自省收敛" % threshold, 95)
             break
 
@@ -1069,8 +1187,10 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
         result["negative_unknown"] = best["negative_unknown"]
 
     last_score = history[-1]["score"] if history else None
+    last_dims = history[-1].get("dimensions") if history else None
     return {"rounds": history,
             "final_score": best["score"] if best["score"] >= 0 else last_score,
+            "final_dims": best["dimensions"] if best["round"] else last_dims,
             "picked_round": best["round"],
             "iterations": len(history)}
 
@@ -1093,7 +1213,7 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
     history = []
     rounds = max(1, int(rounds))
     # 多轮评审里分数可能回落，最后采用「得分最高」的那一轮提示词
-    best = {"score": -1, "round": None, "prompt": None}
+    best = {"score": -1, "round": None, "dimensions": None, "prompt": None}
 
     for i in range(1, rounds + 1):
         say("自省第 %d/%d 轮：审核员评分中…" % (i, rounds),
@@ -1115,31 +1235,38 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
             content = ""
         crit = _extract_json(content)
         if not crit:
-            history.append({"round": i, "score": None, "problems": ["评审没返回 JSON"],
+            history.append({"round": i, "score": None, "dimensions": None,
+                            "problems": ["评审没返回 JSON"],
                             "missing": [], "changed": 0})
             break
 
-        score = crit.get("score")
-        try:
-            score = int(score)
-        except Exception:
-            score = None
+        score, dims = _review_score(crit, KREA_DIM_WEIGHTS)
+        if score is None:
+            # 既没给 score 也没有可用分项 → 这轮评审作废（沿用原有降级逻辑）
+            history.append({"round": i, "score": None, "dimensions": dims,
+                            "problems": ((crit.get("problems") or [])[:5]
+                                         or ["评审没给分数"]),
+                            "missing": (crit.get("missing") or [])[:5],
+                            "changed": 0})
+            break
         new_prompt = _clean_prompt(crit.get("prompt") or crit.get("positive") or "")
         changed = 0
         if new_prompt and new_prompt != cur:
             result["prompt"] = new_prompt
             changed += 1
         history.append({"round": i, "score": score,
+                        "dimensions": dims,
                         "problems": (crit.get("problems") or [])[:5],
                         "missing": (crit.get("missing") or [])[:5],
                         "changed": changed})
-        if score is not None and score > best["score"]:
-            best = {"score": score, "round": i, "prompt": result["prompt"]}
+        if score > best["score"]:
+            best = {"score": score, "round": i, "dimensions": dims,
+                    "prompt": result["prompt"]}
         say("自省第 %d/%d 轮：%s 分，改动 %d 处"
             % (i, rounds, score if score is not None else "—", changed),
             66.0 + i * 28.0 / rounds)
-        if (score is not None and score >= threshold) or changed == 0:
-            if score is not None and score >= threshold:
+        if score >= threshold or changed == 0:
+            if score >= threshold:
                 say("分数达到 %d，自省收敛" % threshold, 95)
             break
 
@@ -1148,8 +1275,10 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=92, progress=None
         result["prompt"] = best["prompt"]
 
     last_score = history[-1]["score"] if history else None
+    last_dims = history[-1].get("dimensions") if history else None
     return {"rounds": history,
             "final_score": best["score"] if best["score"] >= 0 else last_score,
+            "final_dims": best["dimensions"] if best["round"] else last_dims,
             "picked_round": best["round"],
             "iterations": len(history)}
 
