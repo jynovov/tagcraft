@@ -107,7 +107,8 @@ def main():
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     app = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"),
                             "--port", str(app_port), "--no-browser", "--no-update"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=dict(os.environ, TAGCRAFT_NO_CACHE="1"))
     try:
         if not wait_up(mock_port) or not wait_up(app_port):
             print("启动失败：假 ComfyUI 或被测服务没起来")

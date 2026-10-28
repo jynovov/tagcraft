@@ -131,6 +131,7 @@ def main():
             [sys.executable, os.path.join(ROOT, "server.py"),
              "--port", str(PORT), "--no-browser", "--no-update"],
             cwd=ROOT, stdin=devnull, stdout=devnull, stderr=devnull,
+            env=dict(os.environ, TAGCRAFT_NO_CACHE="1"),
             creationflags=creation)
         if not wait_up():
             say("  启动失败：端口 %d 一直没有监听" % PORT)

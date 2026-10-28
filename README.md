@@ -196,7 +196,13 @@ python server.py
 ```
 tagcraft/
 ├── TagCraft.exe                  Windows 启动器（图标已嵌在 exe 资源里）
-├── server.py                     本地服务（静态页 + 词表 + 大模型代理 + 两套提示词档案）
+├── server.py                     本地服务：静态页 + HTTP 路由 + 后台任务
+├── common.py / netutil.py        路径与日志、本机直连与 JSON 收发
+├── dict_db.py                    词表：建库 / 导入 / 检索 / 校验
+├── llm_client.py                 大模型请求、重试与错误翻译
+├── agent_core.py                 工具定义、智能体循环、自省重写
+├── comfy_client.py               ComfyUI 连通性、节点识别、提交队列
+├── gen_cache.py                  生成结果缓存（SQLite，默认 7 天）
 ├── index.html / app.js           生成页（NoobAI 系 → Danbooru tag）
 ├── krea.html / krea.js           Krea2 页（英文自然语言提示词）
 ├── favorites.html / favorites.js 收藏页
@@ -220,6 +226,7 @@ tagcraft/
 ├── tests/progress_e2e_test.js    进度条端到端测试（真实服务 + 真实前端逻辑）
 ├── tests/krea_e2e_test.js        Krea2 端到端测试（生成 → 进度 → 自省 → 填回界面）
 ├── tests/lc_tools_test.py        LangChain 适配测试（没装依赖时自动跳过）
+├── tests/cache_test.py           生成缓存测试（key 隔离 / 过期 / 清空）
 ├── docs/                         中文文档
 ├── assets/                       图标（含版权说明，见其 README）
 └── data/
@@ -244,6 +251,15 @@ pip install -r requirements-langchain.txt
 大模型请求仍然走项目自己的 `urllib` 传输，保留“直连本机、绕开系统代理”的处理，所以不需要 openai SDK。
 
 工具执行依然走 `run_tool`，两条路径行为一致；`tests/lc_tools_test.py` 会校验自动生成的 schema 与内置定义完全一致。
+
+## 生成缓存
+
+同一段描述 + 同一组参数，第二次请求直接返回，不再调模型：
+
+- 存在 `data/cache.sqlite`，默认 **7 天**、最多 **1000 条**（`TAGCRAFT_CACHE_TTL` / `TAGCRAFT_CACHE_MAX` 可调）
+- 命中时响应里带 `"cached": true`；`GET /api/status` 的 `cache` 字段能看到条数与命中数
+- 关掉：`config.json` 里 `"use_cache": false`，或环境变量 `TAGCRAFT_NO_CACHE=1`
+- 清空：`POST /api/cache/clear`
 
 ## 文档
 
@@ -324,14 +340,14 @@ node tests/krea_e2e_test.js
 
 ## 数据来源与致谢
 
-- 词表：[ffdkj/Danbooru_Tag-Chinese-English-Translation-Table](https://github.com/ffdkj/ffdkj-Danbooru_Tag-Chinese-English-Translation-Table)（MIT）、[GuWuW/danbooru-dict](https://github.com/GuWuW/danbooru-dict)（别名）
+- 词表：[ffdkj/Danbooru_Tag-Chinese-English-Translation-Table](https://github.com/ffdkj/ffdkj-Danbooru_Tag-Chinese-English-Translation-Table)（MIT）
 - Tag 体系来自 [Danbooru](https://danbooru.donmai.us/)
 - 同类项目：[sd-webui-prompt-all-in-one](https://github.com/Physton/sd-webui-prompt-all-in-one)、[a1111-sd-webui-tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete)
 
 ## 声明
 
 - 本项目是**独立的第三方工具**，与 Danbooru、DeepSeek、任何模型作者均无关联
-- **图标版权**：`assets/` 下的图是 AI 生成的 DeepSeek 形象图，「DeepSeek」名称与商标归其权利人所有，仅作为本项目图标使用，不在 MIT 授权范围内
+- **图标**：`assets/` 下的图标是本项目自绘的（蓝底 TC 徽标），随代码一起按 MIT 授权，不含任何第三方角色形象
 - **MIT 许可证只覆盖代码**，不覆盖 `assets/` 下的图片（详见 [LICENSE](LICENSE) 末尾说明）
 - 生成的 tag 与出图内容请自行确保符合当地法律与平台条款；画师名（artist tag）涉及版权与风格模仿，商用前请谨慎
 

@@ -97,7 +97,8 @@ def main():
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     app = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"),
                             "--port", str(app_port), "--no-browser", "--no-update"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=dict(os.environ, TAGCRAFT_NO_CACHE="1"))
     text = "黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头"
     try:
         if not wait_up(mock_port) or not wait_up(app_port):

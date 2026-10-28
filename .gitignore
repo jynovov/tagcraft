@@ -30,3 +30,5 @@ desktop.ini
 
 # 调试时产生的临时文件
 data/_*
+
+mock_llm_calls.json

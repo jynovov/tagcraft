@@ -59,7 +59,7 @@ function waitUp(port, ms = 25000) {
     { env: Object.assign({}, process.env, { MOCK_LLM_PORT: String(mp), MOCK_LLM_DUMP: dump }),
       stdio: 'ignore' });
   const app = spawn(PY, [path.join(WS, 'server.py'), '--port', String(ap),
-                         '--no-browser', '--no-update'], { stdio: 'ignore' });
+                         '--no-browser', '--no-update'], { stdio: 'ignore', env: Object.assign({}, process.env, { TAGCRAFT_NO_CACHE: '1' }) });
   const BASE = 'http://127.0.0.1:' + ap;
   const API = { api_base: 'http://127.0.0.1:' + mp + '/v1/chat/completions',
                 api_key: 'k', model: 'slow-krea' };
