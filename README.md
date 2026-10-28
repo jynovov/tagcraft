@@ -347,7 +347,7 @@ node tests/krea_e2e_test.js
 ## 声明
 
 - 本项目是**独立的第三方工具**，与 Danbooru、DeepSeek、任何模型作者均无关联
-- **图标**：`assets/` 下的图标是本项目自绘的（蓝底 TC 徽标），随代码一起按 MIT 授权，不含任何第三方角色形象
+- **图标**：`assets/` 下的图是 AI 生成的 DeepSeek 形象图，「DeepSeek」名称与商标归其权利人所有，仅作为本项目图标使用，不在 MIT 授权范围内
 - **MIT 许可证只覆盖代码**，不覆盖 `assets/` 下的图片（详见 [LICENSE](LICENSE) 末尾说明）
 - 生成的 tag 与出图内容请自行确保符合当地法律与平台条款；画师名（artist tag）涉及版权与风格模仿，商用前请谨慎
 
