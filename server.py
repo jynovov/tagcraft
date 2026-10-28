@@ -28,7 +28,7 @@ from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_cou
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, prompt_style_warnings, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, prompt_style_warnings, reorder_hits, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -455,7 +455,9 @@ class Handler(BaseHTTPRequestHandler):
                 neg = [str(t).strip() for t in (parsed.get("negative") or []) if str(t).strip()]
                 valid, unknown = validate_tags(pos)
                 valid_neg, unknown_neg = validate_tags(neg)
-                # 服务端硬约束：正向只留词表确认过的；不通过的进 positive_unknown
+                # 服务端硬约束：正向只留词表确认过的；不通过的进 positive_unknown。
+                # 再按固定分组排好序（确定性排序，不靠模型）。
+                valid = reorder_hits(valid)
                 parsed["positive"] = [h["tag"] for h in valid]
                 res = {
                     "parsed": parsed,

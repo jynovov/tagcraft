@@ -16,7 +16,8 @@ import webbrowser
 
 import lc_tools
 
-from dict_db import QUALITY_TAGS, get_tag, resolve_alias, search_tags, suggest_for, validate_tags
+from dict_db import (QUALITY_TAGS, get_tag, get_tags, resolve_alias, search_tags,
+                     suggest_for, validate_tags)
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, SYSTEM_PROMPT, _extract_json, _post_chat, get_model, prefs_prompt_block
 
@@ -185,7 +186,7 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
     "constraints": 0-5 整数（约束：正向 25~45 个、负向 4~12 个、格式与权重写法）
   },
   "problems": ["具体问题，最多 5 条，没有就空数组"],
-  "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条"],
+  "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条（要包含构图/留白/氛围/材质/媒介这类抽象项）"],
   "positive": ["修正后的正向 tag，按重要性从高到低"],
   "negative": ["修正后的负向 tag"]
 }
@@ -250,6 +251,10 @@ CONCEPT_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念
 
 注意：
 - 只抽概念（中文优先），不要写英文 tag，也不要在这里输出最终 tag 清单。
+- 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项：它们也是画面要素，
+  而且往往正是最终提示词最容易漏掉的东西。
+  例 1：「画面右侧大面积留白，题字在左上角」→ 抽出「留白」「题字」「构图」；
+  例 2：「宣纸质感的水墨画，江南白墙拱桥」→ 抽出「宣纸」「水墨」「白墙」「拱桥」「江南水乡」。
 - 抽象情绪、对白、前因后果不要抽；只抽画得出来的东西。
 """
 
@@ -266,6 +271,10 @@ CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的�
 注意：
 - 这个规划只用于展示，不会自动执行；不要输出 tag 本身，也不要输出最终 JSON 结果。
 - queries 要具体，指向描述里「这个英文怎么说才准」的要素。
+- concepts 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项，它们的英文写法
+  往往最难猜、也最容易被漏掉。
+  例 1：「画面右下角留白很多」→ 抽出「留白」「构图」；
+  例 2：「宣纸质感的水墨画」→ 抽出「宣纸」「水墨」「材质」。
 - concepts 和 elements 可以是同一批内容的不同视角，但都要去重、去空。
 """
 
@@ -535,16 +544,60 @@ def _is_general(hit):
     return (hit or {}).get("category") not in (1, 3, 4)
 
 
-def map_concepts(concepts, limit=3):
+# 小型同义词兜底表：中文概念 → 词表里的英文 tag。
+# 只覆盖「中文很常用、词表按中文却查不到」的那几个抽象项（留白、材质、媒介等）。
+# 注意：映射前仍要过词表校验，词表里没有的 tag 一律忽略（例如 ink_wash / white_wall）。
+TAG_SYNONYMS = {
+    "留白": "negative_space",
+    "空白": "negative_space",
+    "宣纸": "paper_texture",
+    "纸张纹理": "paper_texture",
+    "水墨": "ink_wash",
+    "水墨画": "ink_wash_painting",
+    "拱桥": "arch_bridge",
+    "白墙": "white_wall",
+}
+
+
+def _synonym_key(concept):
+    """同义词表里命中的那个中文关键词（整词优先，其次最长包含）。"""
+    text = " ".join(str(concept if concept is not None else "").split()).strip()
+    if not text:
+        return None
+    key = text.lower()
+    if key in TAG_SYNONYMS:
+        return key
+    hits = [k for k in TAG_SYNONYMS if len(k) >= 2 and k in text]
+    return max(hits, key=len) if hits else None
+
+
+def synonym_tag(concept):
+    """同义词兜底：中文概念 → 词表确认存在的 tag；词表里没有就返回 None。
+
+    先整词命中，再退一步找「表里的词是这个概念的一部分」（例如「水墨渲染」→「水墨」）。
+    命中后一定要再查一次词表：不存在的不许注入，避免把自造词塞进提示词。
+    """
+    key = _synonym_key(concept)
+    if not key:
+        return None
+    hit = get_tag(TAG_SYNONYMS[key])
+    if not hit:
+        return None
+    return str(hit.get("tag") or "").strip() or None
+
+
+def map_concepts(concepts, limit=3, with_candidates=True):
     """把概念逐个映射到词表（纯本地，不调模型）。
 
     规则：
       1. get_tag(概念)：英文名精确存在 → 已确认
       2. resolve_alias(概念)：别名/中文精确、且是通用分类 → 已确认
-      3. search_tags(概念)：只留通用分类；首条精确 → 已确认
-      4. 候选中文名以概念结尾时，剥掉颜色/数量等修饰前缀，能还原成词表里的
+      3. synonym_tag(概念)：同义词兜底表命中、且词表确认存在 → 已确认
+      4. search_tags(概念)：只留通用分类；首条精确 → 已确认
+      5. 候选中文名以概念结尾时，剥掉颜色/数量等修饰前缀，能还原成词表里的
          更通用 tag → 已确认（例：过膝袜 → black_thighhighs → thighhighs）
-      5. 都不成立 → 未确认，候选取前 3 个通用分类结果（可能为空）
+      6. 都不成立 → 未确认，候选取前 3 个通用分类结果（可能为空）
+    with_candidates=False 时不再为未确认概念查候选（自省兜底用，省掉多余全表扫描）。
     返回 {"confirmed": [{concept, tag}], "unknown": [{concept, candidates}]}。
     """
     confirmed, unknown = [], []
@@ -560,6 +613,12 @@ def map_concepts(concepts, limit=3):
             alias_hit = resolve_alias(concept)
             if alias_hit and _is_general(alias_hit) and _is_exact_concept(concept, alias_hit):
                 hit = alias_hit
+
+        if not hit:
+            # 同义词兜底：留白 → negative_space 这类词表按中文名查不到的概念
+            syn = synonym_tag(concept)
+            if syn:
+                hit = get_tag(syn)
 
         if not hit:
             rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
@@ -581,6 +640,10 @@ def map_concepts(concepts, limit=3):
                 continue
             seen_tags.add(tag)
             confirmed.append({"concept": concept, "tag": tag})
+            continue
+
+        if not with_candidates:
+            unknown.append({"concept": concept, "candidates": []})
             continue
 
         rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
@@ -620,6 +683,105 @@ def concepts_prompt_block(mapping):
     lines.append("只能使用上面「已确认」里的 tag；未确认的概念只能从它列出的候选里挑一个，"
                  "候选也没有就整条省略。禁止自造 tag，也不要把中文概念直译成词表里没有的组合。")
     return "\n".join(lines) + "\n"
+
+
+# 自省给的 missing 常带这些前缀（「没有体现…」「缺少…」），拆概念前先剥掉
+_MISSING_PREFIXES = ("没有体现出", "没有体现", "没有表现出来", "没有表现", "未体现出", "未体现",
+                     "没有画出来", "没有画出", "缺少", "缺了", "缺失", "漏了", "漏掉",
+                     "没有", "未能", "没体现", "不足")
+
+
+def _missing_variants(text):
+    """把一条 missing（中文）拆成几个可以拿去查词的短概念。
+
+    整句只在很短时才拿去查词：missing 多是「没有体现…」这种句子，
+    用整句做词表检索基本查不到，还白花一次全表扫描。
+    """
+    raw = " ".join(str(text if text is not None else "").split()).strip("·-、,，;；。 ")
+    out, seen = [], set()
+
+    def add(s):
+        s = s.strip("·-、,，;；。 的")
+        if not s or len(s) > 10 or s.lower() in seen:
+            return
+        seen.add(s.lower())
+        out.append(s)
+
+    if len(raw) <= 8:
+        add(raw)
+    core = raw
+    for p in _MISSING_PREFIXES:
+        while core.startswith(p):
+            core = core[len(p):].strip("的 ")
+    add(core)
+    for part in re.split(r"[、,，;；/和与及]", core or raw):
+        add(part)
+    return out
+
+
+def missing_concepts(missing):
+    """把自省的 missing（中文）反向映射成词表里确认存在的 tag。
+
+    步骤：
+      1. 先用现成的 map_concepts 映射一遍（整句 + 拆出来的短概念都试）
+      2. 只接受「精确命中」的结果（避免把「材质」泛化成 fabric 这类误伤）
+      3. 同义词兜底表补漏（留白 → negative_space 等），映射前仍过词表校验
+    返回 [(中文概念, 英文 tag)]，按 tag 去重；词表里不存在的一律不返回。
+    """
+    concepts, seen_c = [], set()
+    for raw in (missing or []):
+        for v in _missing_variants(raw):
+            if v.lower() not in seen_c:
+                seen_c.add(v.lower())
+                concepts.append(v)
+    # 短概念优先、并且限个数：查词是纯本地 SQL，但全表扫描不便宜，别为了兜底拖慢自省
+    concepts = sorted(concepts, key=len)[:12]
+
+    pairs, seen_tags = [], set()
+    if concepts:
+        # 只要「确认」结果，不需要候选：省掉每个未命中的一次全表扫描
+        mapping = map_concepts(concepts, with_candidates=False)
+        for item in (mapping.get("confirmed") or []):
+            concept = str(item.get("concept") or "")
+            tag = str(item.get("tag") or "").strip()
+            if not tag or tag in seen_tags:
+                continue
+            hit = get_tag(tag)
+            # 只认精确写法：tag 名 / 别名 / 中文名（含分段）真的就是这个概念
+            if not (hit and _is_general(hit) and _is_exact_concept(concept, hit)):
+                continue
+            seen_tags.add(tag)
+            pairs.append((concept, tag))
+
+    for concept in concepts:
+        tag = synonym_tag(concept)
+        if tag and tag not in seen_tags:
+            seen_tags.add(tag)
+            # 指令里用命中的中文关键词（「留白」），而不是整句 missing
+            pairs.append((_synonym_key(concept) or concept, tag))
+    return pairs
+
+
+def missing_prompt_block(pairs, current=None, limit=8):
+    """把 missing 反向映射的结果拼成「必须补上」指令，塞进下一轮改写请求。
+
+    已经在当前正向里的不再啰嗦；没有可补的返回空字符串。
+    """
+    have = {str(t).strip().lower() for t in (current or []) if str(t).strip()}
+    lines = []
+    for concept, tag in (pairs or []):
+        tag = str(tag or "").strip()
+        if not tag or tag.lower() in have:
+            continue
+        lines.append("  必须补上：%s→%s" % (concept, tag))
+        if len(lines) >= max(1, int(limit)):
+            break
+    if not lines:
+        return ""
+    return ("\n【必须补上】自省指出中文描述里有、但正向 tag 没体现的要素：\n"
+            + "\n".join(lines) + "\n"
+            + "上面这些写法都已在词表里确认存在，下一轮直接加进 positive；"
+              "其它 tag 保持原样、顺序不变。\n\n")
 
 
 def _brief_tag(h):
@@ -796,6 +958,231 @@ def prompt_style_warnings(prompt):
     if _WEIGHT_STYLE.search(prompt or ""):
         warns.append("出现了权重语法，Krea 2 不需要")
     return warns
+
+
+# ============================ 正向 tag 排序 ============================
+# 服务端确定性排序：不依赖模型有没有按顺序输出。
+# 分组顺序（组内保持原顺序，无法分类的放最后）：
+#   质量词 → 人数/构图 → 人物特征(发/眼/服装) → 动作/表情
+#          → 场景 → 背景 → 光照 → 风格/媒介 → 未分类
+ORDER_QUALITY = 0
+ORDER_COUNT = 1
+ORDER_CHARACTER = 2
+ORDER_ACTION = 3
+ORDER_SCENE = 4
+ORDER_BACKGROUND = 5
+ORDER_LIGHT = 6
+ORDER_STYLE = 7
+ORDER_OTHER = 9
+
+ORDER_GROUP_NAMES = {
+    ORDER_QUALITY: "质量词",
+    ORDER_COUNT: "人数/构图",
+    ORDER_CHARACTER: "人物特征",
+    ORDER_ACTION: "动作/表情",
+    ORDER_SCENE: "场景",
+    ORDER_BACKGROUND: "背景",
+    ORDER_LIGHT: "光照",
+    ORDER_STYLE: "风格/媒介",
+    ORDER_OTHER: "未分类",
+}
+
+# 人数 / 构图：这些 tag 直接决定画面主体，排在人物特征之前
+_COUNT_TAGS = {
+    "1girl", "2girls", "3girls", "4girls", "5girls", "6+girls",
+    "1boy", "2boys", "3boys", "4boys", "5boys", "6+boys",
+    "solo", "solo_focus", "multiple_girls", "multiple_boys", "multiple_others",
+    "no_humans", "group", "duo", "trio", "everyone", "male_focus", "female_focus",
+    # 留白 / 负空间也是构图项（用户实测里最常被漏的那个）
+    "negative_space",
+}
+
+_COUNT_WORDS = {
+    "shot", "close", "closeup", "portrait", "profile", "pov", "angle", "framing",
+    "cropped", "framed", "full", "upper", "lower", "from", "above", "below",
+}
+
+# 动作 / 表情：整词匹配（组合 tag 拆词后会丢信息，所以另存一份完整写法）
+_ACTION_TAGS = {
+    "looking_back", "looking_away", "looking_down", "looking_up",
+    "looking_at_viewer", "looking_to_the_side", "looking_at_another",
+    "closed_eyes", "half-closed_eyes", "one_eye_closed", "open_mouth",
+    "closed_mouth", "head_tilt", "head_down", "head_up", "turning_head",
+    "turning_around", "crossed_arms", "arms_up", "arms_behind_back",
+    "arms_behind_head", "hand_up", "hands_up", "hand_on_hip", "hands_on_hips",
+    "hand_on_own_hip", "standing", "sitting", "lying", "walking", "running",
+    "jumping", "leaning_forward", "leaning_back", "holding", "waving",
+    "pointing", "dancing", "singing", "reading", "sleeping", "eating",
+    "drinking", "hugging", "kiss", "kissing", "peace_sign", "thumbs_up",
+    "salute", "bowing", "stretching", "reaching", "crouching", "kneeling",
+    "squatting", "walking_towards_viewer", "spread_legs", "hug",
+}
+
+_ACTION_WORDS = {
+    "smile", "smiling", "grin", "grinning", "laugh", "laughing", "cry", "crying",
+    "tears", "teary", "blush", "blushing", "angry", "sad", "surprised",
+    "expressionless", "looking", "standing", "sitting", "lying", "walking",
+    "running", "jumping", "leaning", "holding", "waving", "pointing",
+    "dancing", "singing", "reading", "sleeping", "eating", "drinking", "pose",
+    "gesture", "saluting",
+}
+
+# 场景 / 背景：先说人在哪，再说背景是什么（两者都放一起）
+_SCENE_WORDS = {
+    "sky", "skies", "cloud", "clouds", "cloudscape", "scenery", "landscape",
+    "cityscape", "seascape", "waterscape", "river", "lake", "pond", "sea",
+    "ocean", "beach", "shore", "coast", "water", "underwater", "wave", "waves",
+    "waterfall", "mountain", "mountains", "hill", "hills", "forest", "woods",
+    "tree", "trees", "willow", "bamboo", "flower", "flowers", "blossom",
+    "blossoms", "petal", "petals", "garden", "park", "field", "grass",
+    "meadow", "path", "road", "street", "alley", "city", "town", "village",
+    "building", "buildings", "house", "temple", "shrine", "pagoda", "castle",
+    "ruins", "bridge", "stairs", "fence", "wall", "walls", "window", "windows",
+    "door", "doorway", "room", "interior", "floor", "ground", "sand", "desert",
+    "snow", "rain", "fog", "mist", "rooftop", "balcony", "courtyard",
+    "terrace", "tower", "gate", "lantern", "outdoors", "indoors", "night",
+    "day", "dusk", "dawn", "evening", "morning", "sunset", "sunrise",
+    "twilight", "moon", "stars", "sun", "horizon", "skyline", "boat",
+    "pavilion", "cave", "island", "valley", "cliff", "land", "earth",
+    "dirt", "wooden", "seaside", "riverside", "lakeside",
+}
+
+_BACKGROUND_WORDS = {"background", "backgrounds", "backdrop", "wallpaper"}
+
+# 光照
+_LIGHT_WORDS = {
+    "light", "lights", "lighting", "backlight", "backlighting", "backlit",
+    "sunlight", "moonlight", "starlight", "spotlight", "lamplight",
+    "candlelight", "shadow", "shadows", "shaded", "glow", "glowing", "flare",
+    "ray", "rays", "sunbeam", "sunbeams", "dappled", "illumination", "bloom",
+    "sparkle", "sparkles", "silhouette", "reflection", "reflections",
+}
+
+# 人物特征：发型 / 瞳色 / 五官 / 服装 / 饰品
+_CHARACTER_WORDS = {
+    "hair", "hairs", "haired", "ahoge", "bangs", "braid", "braids", "ponytail",
+    "twintails", "sideponytail", "hairband", "hairclip", "hairpin", "hair_ornament",
+    "sidelocks", "bun", "bob", "hime", "curly", "wavy", "straight", "short",
+    "long", "eyes", "eye", "iris", "pupil", "pupils", "eyebrows", "eyelashes",
+    "eyeshadow", "heterochromia", "glasses", "sunglasses", "eyewear", "eyepatch",
+    "clothes", "clothing", "dress", "skirt", "shirt", "blouse", "sweater",
+    "hoodie", "jacket", "coat", "cape", "cloak", "uniform", "kimono", "yukata",
+    "hanfu", "cheongsam", "qipao", "socks", "stockings", "thighhighs",
+    "pantyhose", "kneehighs", "legwear", "tights", "gloves", "mittens", "hat",
+    "cap", "hood", "scarf", "ribbon", "bow", "bowtie", "necktie", "tie",
+    "choker", "necklace", "earrings", "earring", "bracelet", "ring", "jewelry",
+    "armor", "gauntlet", "gauntlets", "boots", "shoes", "sandals", "slippers",
+    "heels", "pants", "trousers", "shorts", "jeans", "apron", "swimsuit",
+    "bikini", "lingerie", "underwear", "panties", "bra", "sash", "belt", "bag",
+    "backpack", "purse", "wings", "tail", "horns", "ears", "fangs", "makeup",
+    "lipstick", "nail", "tattoo", "scar", "bandages", "bandage", "headwear",
+    "headphones", "crown", "halo", "veil", "collar", "sleeves", "sleeve",
+    "shoulders", "skin", "breasts", "collarbone", "navel", "thighs", "legs",
+    "feet", "barefoot", "freckles", "mole",
+}
+
+# 风格 / 媒介（含材质、画风、传统媒介）
+_STYLE_WORDS = {
+    "watercolor", "watercolour", "ink", "monochrome", "greyscale", "grayscale",
+    "sketch", "lineart", "comic", "manga", "anime", "chibi", "realistic",
+    "photorealistic", "painting", "oil", "pastel", "pencil", "crayon",
+    "vector", "pixel", "retro", "traditional", "media", "medium", "ukiyo",
+    "woodblock", "paper", "texture", "canvas", "print", "engraving",
+    "lithograph", "cel", "shading", "sepia", "duotone", "halftone", "poster",
+    "illustration", "style", "aesthetic", "art", "artwork", "photo",
+    "photograph", "film", "grain", "minimalism", "surreal",
+}
+
+_QUALITY_SUFFIX = re.compile(r"(^|_)quality$")
+_TAG_WORD_SPLIT = re.compile(r"[_\-\s()\[\]{}]+")
+
+
+def _tag_words(tag):
+    """把 tag 拆成小写词片段：long_hair → {long, hair}。"""
+    return {w for w in _TAG_WORD_SPLIT.split(str(tag or "").lower()) if w}
+
+
+def _tag_category(tag):
+    """单个 tag 在词表里的分类（查不到返回 None）。"""
+    try:
+        hit = get_tag(tag)
+    except Exception:  # noqa: BLE001 - 词表没建好也不能拖垮生成
+        return None
+    return (hit or {}).get("category")
+
+
+def tag_order_group(tag, category=None):
+    """判断一个正向 tag 属于哪个排序组（返回 ORDER_* 常量）。"""
+    name = str(tag or "").strip().lower()
+    if not name:
+        return ORDER_OTHER
+    # 质量词：模型侧质量词优先，其次是 xxx_quality 这类写法
+    if name in QUALITY_TAGS or _QUALITY_SUFFIX.search(name):
+        return ORDER_QUALITY
+    if category is None:
+        category = _tag_category(name)
+    # 词表分类优先：角色名算人物，画师/作品算风格来源
+    if category == 4:
+        return ORDER_CHARACTER
+    if category in (1, 3):
+        return ORDER_STYLE
+    words = _tag_words(name)
+    if words & _BACKGROUND_WORDS:
+        return ORDER_BACKGROUND
+    if words & _SCENE_WORDS:
+        return ORDER_SCENE
+    if words & _LIGHT_WORDS or any(
+            len(w) >= 5 and w.endswith(("light", "lighting", "lit", "shadow", "glow"))
+            for w in words):
+        return ORDER_LIGHT
+    if name in _COUNT_TAGS or words & _COUNT_WORDS:
+        return ORDER_COUNT
+    if name in _ACTION_TAGS:
+        return ORDER_ACTION
+    if words & _CHARACTER_WORDS:
+        return ORDER_CHARACTER
+    if words & _ACTION_WORDS:
+        return ORDER_ACTION
+    if words & _STYLE_WORDS:
+        return ORDER_STYLE
+    return ORDER_OTHER
+
+
+def reorder_tags(tags):
+    """按固定分组给正向 tag 排序（组内保持原顺序，未分类的放最后）。
+
+    纯本地、确定性；不对 tag 做增删，只在顺序上做文章。
+    """
+    items = [str(t).strip() for t in (tags or []) if str(t).strip()]
+    if len(items) < 2:
+        return items
+    try:
+        records = get_tags([t.lower() for t in items])
+    except Exception:  # noqa: BLE001
+        records = {}
+    keyed = []
+    for idx, tag in enumerate(items):
+        category = (records.get(tag.lower()) or {}).get("category")
+        keyed.append((tag_order_group(tag, category), idx, tag))
+    keyed.sort(key=lambda x: (x[0], x[1]))
+    return [t for _, _, t in keyed]
+
+
+def reorder_hits(hits):
+    """按 reorder_tags 的顺序重排词表记录列表（每条记录原样保留）。"""
+    hits = list(hits or [])
+    if len(hits) < 2:
+        return hits
+    ordered = reorder_tags([str((h or {}).get("tag") or "") for h in hits])
+    buckets = {}
+    for h in hits:
+        buckets.setdefault(str((h or {}).get("tag") or ""), []).append(h)
+    out = []
+    for tag in ordered:
+        bucket = buckets.get(tag)
+        if bucket:
+            out.append(bucket.pop(0))
+    return out
 
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
@@ -1084,6 +1471,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         "trace": trace, "stats": stats, "tools_used": tools_ok,
         "review": None,
     }
+    # 服务端确定性排序（不靠模型）：自省前先排好，评审看到的顺序才是最终顺序
+    out["positive"] = reorder_hits(out["positive"])
     if plan_info:
         out["plan"] = plan_info
     if reflect:
@@ -1098,11 +1487,14 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             valid_neg2, unknown_neg2 = validate_tags(neg2)
             out["positive"], out["positive_unknown"] = valid2, unknown2
             out["negative"], out["negative_unknown"] = valid_neg2, unknown_neg2
+            out["positive"] = reorder_hits(out["positive"])
             out["stats"]["checked"] = len(pos2) + len(neg2)
             out["stats"]["unknown"] = len(unknown2) + len(unknown_neg2)
         except Exception as e:  # noqa: BLE001
             out["review"] = {"error": str(e), "rounds": []}
             say("自省没跑完：%s" % e)
+    # 自省可能改过正向列表：最终再排一次，保证任何路径出来的顺序都一致
+    out["positive"] = reorder_hits(out["positive"])
     # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
     out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
     say("完成：正向 %d 个、负向 %d 个" % (len(out["positive"]), len(out["negative"])), 97)
@@ -1128,6 +1520,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
     # 多轮评审里分数可能回落，最后要采用「得分最高」的那一轮结果
     best = {"score": -1, "round": None, "dimensions": None, "positive": None,
             "positive_unknown": None, "negative": None, "negative_unknown": None}
+    # 上一轮 missing 反向映射出的 tag：下一轮改写指令里「必须补上」
+    forced = []
 
     for i in range(1, max(1, int(rounds)) + 1):
         say("自省第 %d/%d 轮：审核员评分中…" % (i, max(1, int(rounds))),
@@ -1140,9 +1534,11 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             len(pos) + len(neg), len(bad), "、".join(bad) or "无")
         ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n"
                "【当前负向 tag】\n%s\n\n【%s】\n\n"
+               "%s"
                "【改写要求】只修改 problems / missing 指出的项；其余 tag 原样保留、"
                "顺序不变；不要重新组织整段。\n\n请审核并输出 JSON。"
-               % (text, ", ".join(pos), ", ".join(neg), report))
+               % (text, ", ".join(pos), ", ".join(neg), report,
+                  missing_prompt_block(forced, pos)))
         body = _post_chat(cfg, {
             "model": model,
             "messages": [{"role": "system", "content": CRITIC_SYSTEM},
@@ -1182,10 +1578,24 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             valid_n, unknown_n = validate_tags(new_neg or neg)
             result["positive"], result["positive_unknown"] = valid, unknown
             result["negative"], result["negative_unknown"] = valid_n, unknown_n
+            # 每轮改写后都重新排序（模型经常把场景/风格排到人物前面）
+            result["positive"] = reorder_hits(result["positive"])
+        missing = (crit.get("missing") or [])[:5]
+        # missing（中文）反向映射成词表 tag，下一轮强制要求补上
+        try:
+            found = missing_concepts(missing)
+        except Exception:  # noqa: BLE001 - 兜底映射失败不能拖垮自省
+            found = []
+        seen_forced = {t for _, t in forced}
+        for concept, tag in found:
+            if tag not in seen_forced:
+                seen_forced.add(tag)
+                forced.append((concept, tag))
         history.append({"round": i, "score": score,
                         "dimensions": dims,
                         "problems": (crit.get("problems") or [])[:5],
-                        "missing": (crit.get("missing") or [])[:5],
+                        "missing": missing,
+                        "missing_tags": [t for _, t in found],
                         "changed": changed})
         if score > best["score"]:
             best = {"score": score, "round": i, "dimensions": dims,
@@ -1214,6 +1624,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
         result["positive_unknown"] = best["positive_unknown"]
         result["negative"] = best["negative"]
         result["negative_unknown"] = best["negative_unknown"]
+    # 无论走哪条路径，最终正向都按固定分组排好（评审失败也不影响）
+    result["positive"] = reorder_hits(result["positive"])
 
     last_score = history[-1]["score"] if history else None
     last_dims = history[-1].get("dimensions") if history else None

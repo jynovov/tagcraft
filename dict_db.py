@@ -437,6 +437,31 @@ def get_tag(name):
     return _row_to_dict(r) if r else None
 
 
+def get_tags(names):
+    """批量精确查询（给「一次查一批 tag 的分类」用，避免逐条来回查库）。
+
+    返回 {小写 tag: 词表记录}；词表里没有的名字不会出现在结果里。
+    单条查询仍用 get_tag；这里只是把 N 次查询合并成少数几条 IN 查询。
+    """
+    out = {}
+    clean = [str(n).strip().lower() for n in (names or []) if str(n).strip()]
+    if not clean:
+        return out
+    uniq = list(dict.fromkeys(clean))
+    # SQLite 的变量个数有上限（老版本 999），分批查更稳
+    for i in range(0, len(uniq), 500):
+        chunk = uniq[i:i + 500]
+        sql = ("SELECT name,category,post_count,aliases,cn FROM tags "
+               "WHERE name IN (%s)" % ",".join("?" * len(chunk)))
+        try:
+            rows = db().execute(sql, chunk).fetchall()
+        except Exception:  # noqa: BLE001 - 词表还没建好时按查不到处理
+            continue
+        for r in rows:
+            out[str(r[0]).lower()] = _row_to_dict(r)
+    return out
+
+
 def resolve_alias(name):
     """把别名/中文名解析成正式 tag。"""
     n = name.strip().lower()

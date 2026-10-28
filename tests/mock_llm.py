@@ -73,6 +73,15 @@ KREA_PROMPT_V2 = (KREA_PROMPT_V1 + " Soft rim light outlines her hair, a gentle 
                   "muted orange and violet sky.")
 
 
+# 排序剧本：故意把场景/风格排到人物前面，还夹一个词表里没有的 white_wall，
+# 用来验证「服务端确定性排序」和「自造词只能进 positive_unknown」。
+# 期望排序：masterpiece → 1girl, solo → long_hair, chinese_clothes
+#          → scenery → white_background → backlighting → watercolor_(medium)
+ORDER_POSITIVE = ["scenery", "long_hair", "1girl", "solo", "white_wall",
+                  "chinese_clothes", "white_background", "backlighting",
+                  "watercolor_(medium)", "masterpiece"]
+
+
 # 自省分项剧本：分项与 score 一起给（展示用），另有只给分项 / 都不给的降级剧本
 TAG_DIMS_LOW = {"coverage": 3, "validity": 4, "ordering": 4,
                 "redundancy": 4, "constraints": 4}
@@ -271,6 +280,14 @@ class Handler(BaseHTTPRequestHandler):
             return reply(json.dumps({
                 "prompt": KREA_PROMPT_V1,
                 "notes": "按 Krea 2 的散文式写法整理，突出黄昏逆光",
+            }, ensure_ascii=False))
+
+        # ---- 排序剧本：故意乱序（场景/风格在前、人物在后），验证服务端会重排 ----
+        if "order" in model.lower():
+            return reply(json.dumps({
+                "positive": list(ORDER_POSITIVE),
+                "negative": ["worst_quality", "blurry"],
+                "notes": "故意乱序，用来验证服务端排序",
             }, ensure_ascii=False))
 
         # ---- 生成阶段 ----
