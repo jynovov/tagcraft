@@ -192,6 +192,17 @@ chk('开计划时请求体 plan=true',
     __capture.bodies.length === 2 && __capture.bodies[1].plan === true,
     JSON.stringify(__capture.bodies[1] || {}).slice(0, 120));
 
+/* ---------- 5.1 请求体里的 strict 跟随「严格查词」开关 ---------- */
+chk('请求体默认带 strict=true',
+    __capture.bodies.length === 2 && __capture.bodies[0].strict === true,
+    JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
+saveStrictOn(false);
+await generate();
+chk('关严格查词时请求体 strict=false',
+    __capture.bodies.length === 3 && __capture.bodies[2].strict === false,
+    JSON.stringify(__capture.bodies[2] || {}).slice(0, 120));
+saveStrictOn(true);
+
 return R;
 })();`;
 
@@ -259,6 +270,9 @@ chk('Krea2 请求体带 plan=true',
     JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
 chk('Krea2 请求仍然指定 krea 模型',
     __capture.bodies.length === 1 && __capture.bodies[0].prompt_model === 'krea');
+chk('Krea2 请求不带严格查词开关',
+    __capture.bodies.length === 1 && __capture.bodies[0].strict === undefined,
+    JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
 
 return R;
 })();`;
@@ -283,6 +297,8 @@ const $id = id => document.getElementById(id);
 localStorage.clear();
 init();
 chk('设置页默认不勾选规划展示', $id('plan').checked === false);
+chk('设置页默认勾选严格查词', $id('strict').checked === true);
+chk('默认不写严格查词键', localStorage.getItem('tagcraft.strict') === null);
 
 savePlanOn(true);
 fill();
@@ -298,6 +314,18 @@ $id('plan').checked = true;
 chk('设置页勾选即存', planOn() === true && localStorage.getItem('tagcraft.plan') === '1');
 chk('规划开关不混进 settings 表',
     JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').plan === undefined);
+
+$id('strict').checked = false;
+($id('strict')._on.change || []).forEach(fn => fn({ target: $id('strict') }));
+chk('设置页取消严格查词即存', strictOn() === false &&
+    localStorage.getItem('tagcraft.strict') === '0');
+
+$id('strict').checked = true;
+($id('strict')._on.change || []).forEach(fn => fn({ target: $id('strict') }));
+chk('设置页勾选严格查词即存', strictOn() === true &&
+    localStorage.getItem('tagcraft.strict') === '1');
+chk('严格查词不混进 settings 表',
+    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').strict === undefined);
 
 return R;
 })();`;

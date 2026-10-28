@@ -99,6 +99,9 @@ chk('写法提醒会显示出来',
     document.getElementById('warnLine').textContent.indexOf('权重语法') >= 0);
 chk('工具轨迹渲染出来',
     document.getElementById('trace').innerHTML.indexOf('lookup_term') >= 0);
+chk('Krea2 轨迹里概念核对显示「不适用」',
+    document.getElementById('trace').innerHTML.indexOf('概念核对') >= 0 &&
+    document.getElementById('trace').innerHTML.indexOf('不适用') >= 0);
 chk('自省分数渲染出来',
     document.getElementById('reviewSum').textContent.indexOf('95') >= 0);
 const saved1 = JSON.parse(localStorage.getItem('tagcraft.krea.cur'));

@@ -317,6 +317,36 @@ chk('高分轮带「采用」标记',
 chk('两轮评分都还在历史里',
     document.getElementById('review').innerHTML.indexOf('70 分') >= 0);
 
+/* ---------- 17. 严格查词开关（默认开，单独一个键） ---------- */
+localStorage.clear();
+chk('严格查词默认开', strictOn() === true);
+chk('读取默认值不写 localStorage', localStorage.getItem('tagcraft.strict') === null);
+saveStrictOn(false);
+chk('关掉严格查词', strictOn() === false &&
+    localStorage.getItem('tagcraft.strict') === '0');
+saveStrictOn(true);
+chk('重新打开严格查词', strictOn() === true &&
+    localStorage.getItem('tagcraft.strict') === '1');
+chk('严格查词不混进 settings 表',
+    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').strict === undefined);
+
+/* ---------- 18. 轨迹里的概念核对摘要 ---------- */
+state.stats = { model: 4, tool_calls: 2, checked: 8, unknown: 1, ms: 1000,
+                concepts_confirmed: 5, concepts_unknown: 2 };
+state.trace = [{ round: 1, tool: 'search_tags', args: {}, summary: '查过膝袜' }];
+renderTrace();
+const th = document.getElementById('trace').innerHTML;
+chk('轨迹里显示概念摘要', th.indexOf('概念核对') >= 0 &&
+    th.indexOf('已确认 5 个') >= 0, th.slice(0, 160));
+chk('概念摘要带未确认数', th.indexOf('未确认 2 个') >= 0);
+chk('概念摘要不影响工具轨迹', th.indexOf('search_tags') >= 0);
+
+state.trace = [];
+renderTrace();
+chk('没有工具轨迹时概念摘要单独显示',
+    document.getElementById('traceBox').hidden === false &&
+    document.getElementById('trace').innerHTML.indexOf('已确认 5 个') >= 0);
+
 return R;
 })();`;
 

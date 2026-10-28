@@ -215,7 +215,8 @@ def ping_llm(cfg):
 
 
 def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
-             prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None):
+             prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None,
+             concept_block=""):
     model = (cfg.get("model") or "").strip()
     prof = get_model(prompt_model)
     natural = prof["mode"] == "natural"
@@ -230,6 +231,8 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
         system += "\n本次英文提示词长度：60~120 个英文单词。\n"
     else:
         system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
+        if concept_block:
+            system += concept_block           # 概念核对（严格查词）追加在偏好之后
 
     body = _post_chat(cfg, {
         "model": model,

@@ -28,7 +28,7 @@ from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_cou
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, natural_fields, plan_generate, prompt_style_warnings, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, prompt_style_warnings, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -85,10 +85,13 @@ def _report_stats(res):
             ("（%s 分）" % rv.get("final_score"))
             if rv.get("final_score") is not None else ""))
         return
-    log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
+    log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s%s" % (
         st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
         ("（%s 分）" % rv.get("final_score"))
-        if rv.get("final_score") is not None else ""))
+        if rv.get("final_score") is not None else "",
+        (" · 概念确认 %s / 未确认 %s" % (st.get("concepts_confirmed"),
+                                      st.get("concepts_unknown")))
+        if st.get("concepts_confirmed") is not None else ""))
 
 
 def _start_async_job(text, prompt_model, kwargs, cfg):
@@ -149,6 +152,22 @@ def _clean_prefs(raw):
         if len(out) >= MAX_PREFS:
             break
     return out
+
+
+def _single_concept_parts(concepts, err):
+    """单次生成的严格查词：映射 + 注入段 + 失败轨迹（纯本地，不调模型）。"""
+    if not concepts:
+        return ({"concepts_confirmed": 0, "concepts_unknown": 0}, "",
+                [{"round": 0, "tool": "概念", "args": {},
+                  "summary": "概念抽取没成功（%s），跳过概念核对，继续生成"
+                             % (err or "没有拿到概念")}])
+    mapping = map_concepts(concepts)
+    return (
+        {"concepts_confirmed": len(mapping["confirmed"]),
+         "concepts_unknown": len(mapping["unknown"])},
+        concepts_prompt_block(mapping),
+        [],
+    )
 
 
 class Server(ThreadingHTTPServer):
@@ -354,26 +373,46 @@ class Handler(BaseHTTPRequestHandler):
             natural = get_model(pm)["mode"] == "natural"
             prefs = [] if natural else _clean_prefs(body.get("prefs"))
             plan_flag = bool(body.get("plan", False))
+            # 严格查词只对 tag 模式生效；旧客户端不传时按关处理（兼容既有行为）
+            strict_flag = bool(body.get("strict", False)) and not natural
             ckey = ""
             if gen_cache.enabled(cfg):
                 ckey = gen_cache.make_key("single", text, cfg, pm, max_tags=max_tags,
                                           temperature=temperature, extra_rules=extra_rules,
                                           system_prompt=sys_prompt, prefs=prefs,
-                                          plan=plan_flag)
+                                          plan=plan_flag, strict=strict_flag)
                 hit = gen_cache.get(ckey)
                 if hit:
                     hit["cached"] = True
                     log("命中缓存：%s…" % text[:16])
                     return self._send(200, hit)
-            # 规划展示：单次生成也支持（放在真正生成之前）；失败只记轨迹、不中断
+            # 规划展示 / 严格查词：单次生成也支持（放在真正生成之前）；
+            # 两个都开时合并成一次请求，失败只记轨迹、不中断。
             plan_info, plan_trace = None, []
-            if plan_flag:
+            concept_trace, concept_stats, concept_block = [], {}, ""
+            if plan_flag and strict_flag:
+                concepts, plan_info, concept_err = concept_generate(
+                    cfg, text, temperature=temperature,
+                    model=(cfg.get("model") or "").strip(), with_plan=True)
+                if not plan_info:
+                    plan_trace.append({"round": 0, "tool": "计划", "args": {},
+                                       "summary": "计划没生成出来（%s），继续生成"
+                                                  % (concept_err or "模型没有返回可用计划")})
+                concept_stats, concept_block, concept_trace = _single_concept_parts(
+                    concepts, concept_err)
+            elif plan_flag:
                 plan_info, plan_err = plan_generate(
                     cfg, text, natural=natural, temperature=temperature,
                     model=(cfg.get("model") or "").strip())
                 if not plan_info:
                     plan_trace.append({"round": 0, "tool": "计划", "args": {},
                                        "summary": "计划没生成出来（%s），继续生成" % plan_err})
+            elif strict_flag:
+                concepts, _, concept_err = concept_generate(
+                    cfg, text, temperature=temperature,
+                    model=(cfg.get("model") or "").strip())
+                concept_stats, concept_block, concept_trace = _single_concept_parts(
+                    concepts, concept_err)
             try:
                 content, parsed, usage = call_llm(
                     cfg, text,
@@ -383,6 +422,7 @@ class Handler(BaseHTTPRequestHandler):
                     prompt_model=pm,
                     system_prompt=sys_prompt,
                     prefs=prefs,
+                    concept_block=concept_block,
                 )
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
@@ -415,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                 neg = [str(t).strip() for t in (parsed.get("negative") or []) if str(t).strip()]
                 valid, unknown = validate_tags(pos)
                 valid_neg, unknown_neg = validate_tags(neg)
+                # 服务端硬约束：正向只留词表确认过的；不通过的进 positive_unknown
+                parsed["positive"] = [h["tag"] for h in valid]
                 res = {
                     "parsed": parsed,
                     "raw": content,
@@ -428,13 +470,16 @@ class Handler(BaseHTTPRequestHandler):
 
             if plan_info:
                 res["plan"] = plan_info
-            if plan_trace:
-                res["trace"] = plan_trace
-            if plan_flag:
+            trace_extra = plan_trace + concept_trace
+            if trace_extra:
+                res["trace"] = trace_extra
+            if plan_flag or concept_stats:
                 if isinstance(res.get("stats"), dict):
                     res["stats"]["llm_calls"] = res["stats"].get("llm_calls", 1) + 1
                 else:
                     res["stats"] = {"llm_calls": 2, "tool_calls": 0}
+                if concept_stats:
+                    res["stats"].update(concept_stats)
             if ckey and not res.get("error"):
                 gen_cache.put(ckey, "single", res)
             return self._send(200, res)
@@ -524,6 +569,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "不认识的模型：%s" % pm})
             natural = get_model(pm)["mode"] == "natural"
             prefs = [] if natural else _clean_prefs(body.get("prefs"))
+            # 严格查词只对 tag 模式生效；旧客户端不传时按关处理（兼容既有行为）
+            strict_flag = bool(body.get("strict", False)) and not natural
             kwargs = dict(
                 extra_rules=(body.get("extra_rules") or ""),
                 max_tags=int(body.get("max_tags") or 45),
@@ -536,6 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                 system_prompt=(body.get("system_prompt") or ""),
                 prefs=prefs,
                 plan=bool(body.get("plan", False)),
+                strict=strict_flag,
             )
             akind = "krea" if natural else "agent"
             ckey = ""

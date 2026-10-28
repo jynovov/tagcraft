@@ -245,14 +245,20 @@ function renderPlan() {
 function renderTrace() {
   const tr = state.trace || [];
   const box = $('traceBox');
-  if (!tr.length) {
+  const c = state.stats || {};
+  const conceptLine = (c.concepts_confirmed != null)
+    ? '<div class="step"><span class="tool">概念</span><span class="sum">概念核对 · 已确认 ' +
+      (c.concepts_confirmed || 0) + ' 个 · 未确认 ' + (c.concepts_unknown || 0) + ' 个</span></div>'
+    : '';
+  // 单次生成没有工具轨迹，但概念核对摘要要能单独显示出来
+  if (!tr.length && !conceptLine) {
     box.hidden = true;
     $('trace').innerHTML = '';
     return;
   }
   box.hidden = false;
   $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
-  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
+  $('trace').innerHTML = conceptLine + tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
       <span class="rnd">${s.round}</span>
       <span class="tool">${s.tool}</span>
       <span class="sum">${s.summary || ''}</span>
@@ -534,6 +540,8 @@ function finishGenerate(r, ms) {
         (r.positive_unknown || []).length + (r.negative_unknown || []).length,
     unknown: box.unknown != null ? box.unknown
       : (r.positive_unknown || []).length + (r.negative_unknown || []).length,
+    concepts_confirmed: box.concepts_confirmed != null ? box.concepts_confirmed : null,
+    concepts_unknown: box.concepts_unknown != null ? box.concepts_unknown : null,
     ms: ms
   };
 }
@@ -554,6 +562,7 @@ async function generate() {
     system_prompt: localStorage.getItem(LS_PROMPT) || '',
     prefs: prefsTagsForRequest(),   // 偏好 tag（最多 20 个）；没开 / 没生效的那套时是空数组
     plan: planOn(),                 // 规划展示：关着时后端连那次模型都不调
+    strict: strictOn(),             // 严格查词：默认开；关着时后端跳过概念抽取与注入
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;
@@ -901,7 +910,10 @@ async function revalidate() {
   }
   state.stats = { model: state.stats ? state.stats.model : 0,
                   tool_calls: state.stats ? state.stats.tool_calls : 0,
-                  checked: tags.length, unknown: state.unknown.length, ms: 0 };
+                  checked: tags.length, unknown: state.unknown.length,
+                  concepts_confirmed: state.stats ? state.stats.concepts_confirmed : null,
+                  concepts_unknown: state.stats ? state.stats.concepts_unknown : null,
+                  ms: 0 };
   tidy();
   toast('已按词表校验');
   render();

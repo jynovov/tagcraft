@@ -29,6 +29,7 @@ const LS_PREFS = 'tagcraft.prefs';              // 已保存的偏好（数组�
 const LS_PREFS_ACTIVE = 'tagcraft.prefs.active'; // 当前生效那套的 id（单选）
 const LS_PREFS_ON = 'tagcraft.prefs.on';         // "1" / "0"，总开关
 const LS_PLAN = 'tagcraft.plan';                 // 规划展示开关："1" 开 / 其它（含未设置）关
+const LS_STRICT = 'tagcraft.strict';             // 严格查词开关："0" 关 / 其它（含未设置）开
 const PREFS_MAX = 20;   // 一套最多 20 个 tag（也是发给模型的硬上限）
 
 const ICONS = {
@@ -171,6 +172,14 @@ function planOn() {
 }
 function savePlanOn(on) {
   localStorage.setItem(LS_PLAN, on ? '1' : '0');
+}
+
+/* ---- 严格查词：默认开。关着时后端跳过概念抽取与注入 ---- */
+function strictOn() {
+  return localStorage.getItem(LS_STRICT) !== '0';
+}
+function saveStrictOn(on) {
+  localStorage.setItem(LS_STRICT, on ? '1' : '0');
 }
 
 /* ---- 历史记录：只保留最近 HISTORY_MAX 条 ---- */

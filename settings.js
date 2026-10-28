@@ -98,6 +98,7 @@ function fill() {
   $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
   $('reflect').checked = s.reflect !== false;
   $('plan').checked = planOn();
+  $('strict').checked = strictOn();
 }
 
 function collect() {
@@ -136,6 +137,13 @@ function init() {
     const on = $('plan').checked;
     savePlanOn(on);
     toast(on ? '规划展示已开启' : '规划展示已关闭');
+  });
+
+  // 严格查词：单独一个键（tagcraft.strict），改动即存；默认开
+  $('strict').addEventListener('change', () => {
+    const on = $('strict').checked;
+    saveStrictOn(on);
+    toast(on ? '严格查词已开启' : '严格查词已关闭');
   });
 
   // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）

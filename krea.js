@@ -219,7 +219,9 @@ function renderTrace() {
   }
   box.hidden = false;
   $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
-  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
+  const conceptLine = '<div class="step"><span class="tool">概念</span>' +
+    '<span class="sum">概念核对 · 不适用（Krea 2 不做词表校验）</span></div>';
+  $('trace').innerHTML = conceptLine + tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
       <span class="rnd">${s.round}</span>
       <span class="tool">${s.tool}</span>
       <span class="sum">${escHtml(s.summary || '')}</span>

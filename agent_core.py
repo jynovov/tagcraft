@@ -16,7 +16,7 @@ import webbrowser
 
 import lc_tools
 
-from dict_db import QUALITY_TAGS, get_tag, search_tags, suggest_for, validate_tags
+from dict_db import QUALITY_TAGS, get_tag, resolve_alias, search_tags, suggest_for, validate_tags
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, SYSTEM_PROMPT, _extract_json, _post_chat, get_model, prefs_prompt_block
 
@@ -198,8 +198,38 @@ PLAN_NATURAL_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类�
 """
 
 
+CONCEPT_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念抽取助手。用户会给你一段中文画面描述。
+
+请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
+{
+  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"]
+}
+
+注意：
+- 只抽概念（中文优先），不要写英文 tag，也不要在这里输出最终 tag 清单。
+- 抽象情绪、对白、前因后果不要抽；只抽画得出来的东西。
+"""
+
+
+CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念抽取与画面规划助手。用户会给你一段中文画面描述。
+
+请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
+{
+  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"],
+  "elements": ["画面里真正可画的要素，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑"],
+  "queries": ["为了确认英文写法，打算去词表里查的中文或英文关键词，最多 6 条"]
+}
+
+注意：
+- 这个规划只用于展示，不会自动执行；不要输出 tag 本身，也不要输出最终 JSON 结果。
+- queries 要具体，指向描述里「这个英文怎么说才准」的要素。
+- concepts 和 elements 可以是同一批内容的不同视角，但都要去重、去空。
+"""
+
+
 _PLAN_MAX_ELEMENTS = 12
 _PLAN_MAX_QUERIES = 10
+_CONCEPT_MAX = 25
 
 
 def _clean_plan(parsed):
@@ -237,6 +267,37 @@ def _clean_plan(parsed):
     return {"elements": elements, "queries": queries}
 
 
+def _clean_concepts(parsed):
+    """把模型给的概念列表规整成去空、去重、最多 25 个的字符串列表。
+
+    宽容处理：字符串当单条、非列表当空；拿不到可用概念时返回 []。
+    """
+    if not isinstance(parsed, dict):
+        return []
+    raw = parsed.get("concepts")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    out, seen = [], set()
+    for item in raw:
+        text = " ".join(str(item if item is not None else "").split())
+        text = text.strip("-·、,，;；")
+        if not text:
+            continue
+        # 概念是拿来查词的短词，太长的句子直接截断（避免把整段描述当概念）
+        if len(text) > 24:
+            text = text[:24]
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= _CONCEPT_MAX:
+            break
+    return out
+
+
 def plan_generate(cfg, text, natural=False, temperature=0.3, model=None):
     """生成一份展示用计划；任何失败都返回 (None, 原因)，绝不抛异常。
 
@@ -262,6 +323,172 @@ def plan_generate(cfg, text, natural=False, temperature=0.3, model=None):
     if not plan:
         return None, "计划调用没有返回可用的 JSON"
     return plan, ""
+
+
+def concept_generate(cfg, text, temperature=0.3, model=None, with_plan=False):
+    """让模型先抽画面概念（可选顺带做规划），任何失败都不抛异常。
+
+    返回 (concepts, plan, err)：
+      * concepts 是规整后的字符串列表，拿不到就是 []
+      * plan 只在 with_plan=True 时有值（没有就是 None）
+      * err 是给人看的一句失败原因，成功时为空字符串
+    只发一次请求；with_plan=True 时概念与计划共用这一次，不会多花一次。
+    """
+    system = CONCEPT_PLAN_SYSTEM if with_plan else CONCEPT_SYSTEM
+    payload = {
+        "model": (model if model is not None else (cfg.get("model") or "")).strip(),
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": text}],
+        "temperature": max(0.0, min(0.4, float(temperature))),
+        "stream": False,
+    }
+    try:
+        body = _post_chat(cfg, payload, retries=1)
+    except Exception as e:  # noqa: BLE001 - 概念抽取失败不能拖垮生成
+        return [], None, "概念调用失败：%s" % e
+    try:
+        content = body["choices"][0]["message"].get("content") or ""
+    except Exception:  # noqa: BLE001
+        return [], None, "概念调用返回格式异常"
+    parsed = _extract_json(content)
+    if not parsed:
+        return [], None, "概念抽取没有返回可用的 JSON"
+    concepts = _clean_concepts(parsed)
+    plan = _clean_plan(parsed) if with_plan else None
+    if not concepts:
+        return [], plan, "概念抽取没有返回可用概念"
+    return concepts, plan, ""
+
+
+# 颜色/数量/材质等修饰词：用来把「黑色过膝袜」这类候选还原成更通用的 tag。
+_MODIFIER_PREFIXES = {
+    "black", "white", "red", "blue", "brown", "purple", "pink", "grey", "gray",
+    "green", "yellow", "orange", "blonde", "silver", "gold", "torn", "striped",
+    "fishnet", "single", "frilled", "lace", "plaid", "checkered", "gradient",
+    "multicolored", "two-tone", "translucent", "shiny", "glossy", "mature",
+}
+
+
+def _is_exact_concept(concept, hit):
+    """命中记录是不是「这个概念的精确写法」：英文名 / 别名 / 中文名（含分段）。"""
+    if not hit:
+        return False
+    c = (concept or "").strip().lower()
+    if not c:
+        return False
+    if str(hit.get("tag") or "").lower() == c:
+        return True
+    if any(str(a or "").strip().lower() == c for a in (hit.get("aliases") or [])):
+        return True
+    cn = str(hit.get("cn") or "").strip().lower()
+    if cn == c:
+        return True
+    if c in re.split(r"[/、,，;；\s]+", cn):
+        return True
+    return False
+
+
+def _generalize_tag(name):
+    """候选名去掉颜色/数量/材质前缀后，如果词表里有更通用的 tag，就返回它。"""
+    parts = str(name or "").lower().split("_")
+    while len(parts) > 1 and parts[0] in _MODIFIER_PREFIXES:
+        parts = parts[1:]
+        hit = get_tag("_".join(parts))
+        if hit:
+            return hit
+    return None
+
+
+def _is_general(hit):
+    """只把常规/质量类 tag 当概念映射对象，避免把画师、作品、角色名当成画面要素。"""
+    return (hit or {}).get("category") not in (1, 3, 4)
+
+
+def map_concepts(concepts, limit=3):
+    """把概念逐个映射到词表（纯本地，不调模型）。
+
+    规则：
+      1. get_tag(概念)：英文名精确存在 → 已确认
+      2. resolve_alias(概念)：别名/中文精确、且是通用分类 → 已确认
+      3. search_tags(概念)：只留通用分类；首条精确 → 已确认
+      4. 候选中文名以概念结尾时，剥掉颜色/数量等修饰前缀，能还原成词表里的
+         更通用 tag → 已确认（例：过膝袜 → black_thighhighs → thighhighs）
+      5. 都不成立 → 未确认，候选取前 3 个通用分类结果（可能为空）
+    返回 {"confirmed": [{concept, tag}], "unknown": [{concept, candidates}]}。
+    """
+    confirmed, unknown = [], []
+    seen_tags = set()
+    for raw in (concepts or []):
+        concept = " ".join(str(raw if raw is not None else "").split()).strip()
+        if not concept:
+            continue
+
+        hit = get_tag(concept)
+        if not (hit and _is_general(hit)):
+            hit = None
+            alias_hit = resolve_alias(concept)
+            if alias_hit and _is_general(alias_hit) and _is_exact_concept(concept, alias_hit):
+                hit = alias_hit
+
+        if not hit:
+            rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
+            if rows and _is_exact_concept(concept, rows[0]):
+                hit = rows[0]
+            elif rows:
+                # 只对「中文名以概念结尾」的候选做泛化，避免乱猜
+                for r in rows[:6]:
+                    cn = str(r.get("cn") or "")
+                    if len(concept) >= 2 and cn.endswith(concept):
+                        base = _generalize_tag(r.get("tag"))
+                        if base:
+                            hit = base
+                            break
+
+        if hit:
+            tag = str(hit.get("tag") or "").strip()
+            if not tag or tag in seen_tags:
+                continue
+            seen_tags.add(tag)
+            confirmed.append({"concept": concept, "tag": tag})
+            continue
+
+        rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
+        if not rows:
+            # 搜不到时再用相近候选兜底（suggest_for 内部也是走 search_tags）
+            rows = [r for r in suggest_for(concept, 8) if _is_general(r)]
+        candidates, seen_c = [], set()
+        for r in rows:
+            t = str(r.get("tag") or "").strip()
+            if not t or t in seen_c:
+                continue
+            seen_c.add(t)
+            candidates.append(t)
+            if len(candidates) >= max(1, int(limit)):
+                break
+        unknown.append({"concept": concept, "candidates": candidates})
+    return {"confirmed": confirmed, "unknown": unknown}
+
+
+def concepts_prompt_block(mapping):
+    """把概念核对结果拼成一段系统提示词，追加在 tag 模式的最后。"""
+    confirmed = (mapping or {}).get("confirmed") or []
+    unknown = (mapping or {}).get("unknown") or []
+    if not confirmed and not unknown:
+        return ""
+    lines = ["\n【概念核对】下面这些概念已经和 33 万条 Danbooru 词表核对过："]
+    if confirmed:
+        lines.append("  已确认：" + "；".join(
+            "%s→%s" % (c.get("concept"), c.get("tag")) for c in confirmed[:25]))
+    if unknown:
+        parts = []
+        for u in unknown[:25]:
+            cands = "、".join(u.get("candidates") or [])
+            parts.append("%s（候选：%s）" % (u.get("concept"), cands) if cands
+                         else "%s（无候选）" % u.get("concept"))
+        lines.append("  未确认：" + "；".join(parts))
+    lines.append("只能使用上面「已确认」里的 tag；未确认的概念只能从它列出的候选里挑一个，"
+                 "候选也没有就整条省略。禁止自造 tag，也不要把中文概念直译成词表里没有的组合。")
+    return "\n".join(lines) + "\n"
 
 
 def _brief_tag(h):
@@ -443,7 +670,7 @@ def prompt_style_warnings(prompt):
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                    max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
                    progress=None, prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None,
-                   plan=False):
+                   plan=False, strict=False):
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
@@ -480,8 +707,6 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     if not natural:
         system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
 
-    messages = [{"role": "system", "content": system},
-                {"role": "user", "content": text}]
     trace, stats = [], {"llm_calls": 0, "tool_calls": 0}
     content, parsed = "", None
 
@@ -511,21 +736,61 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
 
     say("读到中文描述（%d 字），开始分析画面要素" % len(text), 4)
 
-    # 规划展示（默认关）：在查词循环之前多调一次模型，产出一份只用于展示的计划。
-    # 关掉时这里一次请求都不发；失败也只记一条轨迹，生成照常继续。
+    # 规划展示（默认关）/ 严格查词（默认由前端开启）：
+    # 都在查词循环之前做，最多只多调一次模型（两个都开时合并成一次）。
+    # 失败只记轨迹，生成照常继续。
     plan_info = None
-    if plan:
-        say("正在规划画面要素与查词方向…", 5)
-        plan_info, plan_err = plan_generate(cfg, text, natural=natural,
-                                           temperature=temperature, model=model)
-        stats["llm_calls"] += 1
-        if plan_info:
+    strict_on = bool(strict) and not natural
+    if plan or strict_on:
+        concepts, concept_err = [], ""
+        if plan and strict_on:
+            say("正在抽取画面概念并规划查词方向…", 5)
+            concepts, plan_info, concept_err = concept_generate(
+                cfg, text, temperature=temperature, model=model, with_plan=True)
+            stats["llm_calls"] += 1
+        elif plan:
+            say("正在规划画面要素与查词方向…", 5)
+            plan_info, plan_err = plan_generate(cfg, text, natural=natural,
+                                               temperature=temperature, model=model)
+            stats["llm_calls"] += 1
+            concept_err = plan_err
+        else:
+            say("正在抽取画面概念，准备用词表核对…", 5)
+            concepts, _, concept_err = concept_generate(
+                cfg, text, temperature=temperature, model=model)
+            stats["llm_calls"] += 1
+
+        if plan and plan_info:
             say("计划就绪：%d 个画面要素、%d 个查词方向"
                 % (len(plan_info["elements"]), len(plan_info["queries"])), 5.5)
-        else:
+        elif plan and not plan_info:
+            # 合并调用失败 / 只拿到概念没拿到计划：计划降级，但不影响生成
             trace.append({"round": 0, "tool": "计划", "args": {},
-                          "summary": "计划没生成出来（%s），继续按原流程生成" % plan_err})
+                          "summary": "计划没生成出来（%s），继续按原流程生成"
+                                     % (concept_err or "模型没有返回可用计划")})
             say("计划没生成出来，继续生成（不影响结果）")
+
+        if strict_on:
+            stats["concepts_confirmed"] = 0
+            stats["concepts_unknown"] = 0
+            if concepts:
+                mapping = map_concepts(concepts)
+                stats["concepts_confirmed"] = len(mapping["confirmed"])
+                stats["concepts_unknown"] = len(mapping["unknown"])
+                block = concepts_prompt_block(mapping)
+                if block:
+                    system += block
+                say("概念核对：已确认 %d 个、未确认 %d 个"
+                    % (stats["concepts_confirmed"], stats["concepts_unknown"]), 5.8)
+            else:
+                # 降级：概念抽取没成功就跳过注入，流程照常
+                trace.append({"round": 0, "tool": "概念", "args": {},
+                              "summary": "概念抽取没成功（%s），跳过概念核对，继续生成"
+                                         % (concept_err or "没有拿到概念")})
+                say("概念抽取没成功，跳过概念核对（不影响结果）")
+
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": text}]
 
     for rnd in range(1, max_r + 1):
         payload = {"model": model, "messages": messages,
@@ -673,6 +938,9 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     say("按 33 万条词表逐条校验 %d 个 tag…" % (len(pos) + len(neg)), 64.8)
     valid, unknown = validate_tags(pos)
     valid_neg, unknown_neg = validate_tags(neg)
+    # 服务端硬约束：正向列表只保留词表确认过的 tag；不通过的进 positive_unknown
+    # （保留候选建议，界面照常展示，不静默丢弃）。
+    parsed["positive"] = [h["tag"] for h in valid]
     stats["checked"] = len(pos) + len(neg)
     stats["unknown"] = len(unknown) + len(unknown_neg)
     say("校验完成：%d 个有效、%d 个不在词表" % (len(valid) + len(valid_neg),
@@ -704,6 +972,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         except Exception as e:  # noqa: BLE001
             out["review"] = {"error": str(e), "rounds": []}
             say("自省没跑完：%s" % e)
+    # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
+    out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
     say("完成：正向 %d 个、负向 %d 个" % (len(out["positive"]), len(out["negative"])), 97)
     return out
 
