@@ -28,7 +28,7 @@ from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_cou
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, plan_prefetch, prompt_style_warnings, reorder_hits, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, negative_space_conflict_trace, plan_generate, plan_prefetch_detail, prefetch_trace_summary, prompt_style_warnings, reorder_hits, resolve_negative_space_conflict, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -389,6 +389,8 @@ class Handler(BaseHTTPRequestHandler):
             # 规划展示 / 严格查词：单次生成也支持（放在真正生成之前）；
             # 两个都开时合并成一次请求，失败只记轨迹、不中断。
             plan_info, plan_trace = None, []
+            prefetch_trace = []
+            conflict_trace = []
             concept_trace, concept_stats, concept_block = [], {}, ""
             if plan_flag and strict_flag:
                 concepts, plan_info, concept_err = concept_generate(
@@ -414,11 +416,13 @@ class Handler(BaseHTTPRequestHandler):
                 concept_stats, concept_block, concept_trace = _single_concept_parts(
                     concepts, concept_err)
             # 计划预查：本地查词表，把结果拼进注入段（不调模型、加了也不算调用）。
-            # Krea2 不做（沿用「计划只展示」）。
+            # Krea2 不做（沿用「计划只展示」）；轨迹里记一条，前端照常渲染。
             if plan_info and not natural:
-                prefetch = plan_prefetch(plan_info.get("queries") or [])
-                if prefetch:
-                    concept_block = prefetch + (concept_block or "")
+                detail = plan_prefetch_detail(plan_info.get("queries") or [])
+                if detail["block"]:
+                    concept_block = detail["block"] + (concept_block or "")
+                    prefetch_trace.append({"round": 0, "tool": "计划预查", "args": {},
+                                           "summary": prefetch_trace_summary(detail)})
             try:
                 content, parsed, usage = call_llm(
                     cfg, text,
@@ -465,14 +469,19 @@ class Handler(BaseHTTPRequestHandler):
                 # 服务端硬约束：正向只留词表确认过的；不通过的进 positive_unknown。
                 # 再按固定分组排好序（确定性排序，不靠模型）。
                 valid = reorder_hits(valid)
+                # 构图冲突：留白 vs 广角/全身 → 留白移入候选补充，不进正向
+                keep, moved = resolve_negative_space_conflict(valid)
+                if moved:
+                    valid = keep
+                    conflict_trace.append(negative_space_conflict_trace())
                 parsed["positive"] = [h["tag"] for h in valid]
                 res = {
                     "parsed": parsed,
                     "raw": content,
                     "positive": valid,
                     "positive_unknown": unknown,
-                    # 单次生成没有自省改写，候选补充就是空数组（结构保持一致）
-                    "positive_candidates": [],
+                    # 单次生成没有自省改写，候选补充只可能是构图冲突搬过来的词
+                    "positive_candidates": moved,
                     "negative": valid_neg,
                     "negative_unknown": unknown_neg,
                     "notes": parsed.get("notes", ""),
@@ -481,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if plan_info:
                 res["plan"] = plan_info
-            trace_extra = plan_trace + concept_trace
+            trace_extra = plan_trace + prefetch_trace + concept_trace + conflict_trace
             if trace_extra:
                 res["trace"] = trace_extra
             if plan_flag or concept_stats:

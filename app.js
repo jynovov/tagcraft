@@ -206,6 +206,13 @@ function render() {
   $('negCount').textContent = state.negative.length;
   $('unkCount').textContent = state.unknown.length;
 
+  // 负向组只显示有效词；被词表拒掉的负向单独给一句提示，但不混进负向组
+  const negRemoved = (state.unknown || []).filter(u => u && u.kind === 'neg').length;
+  const negNote = $('negRemoved');
+  if (negNote) {
+    negNote.textContent = negRemoved ? '已移除 ' + negRemoved + ' 个无效负向' : '';
+  }
+
   const n = $('notes');
   if (state.notes) { n.textContent = state.notes; n.classList.add('show'); }
   else n.classList.remove('show');

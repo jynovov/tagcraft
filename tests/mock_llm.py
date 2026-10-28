@@ -157,8 +157,9 @@ class Handler(BaseHTTPRequestHandler):
                 "elements": ["黄昏海边", "校服女生", "过膝袜", "回头看向镜头", "逆光"],
                 "queries": ["过膝袜", "夕阳", "looking_back"],
             }
-            # 严格查词与规划合并成一次调用时，同一个 JSON 里还要带 concepts
-            if _is_concept(msgs):
+            # 严格查词与规划合并成一次调用时，同一个 JSON 里还要带 concepts。
+            # 模型名带 noconcept 时故意只给计划、不给概念：用来验证「概念降级」的轨迹顺序。
+            if _is_concept(msgs) and "noconcept" not in model.lower():
                 out["concepts"] = CONCEPT_SCRIPT
             return reply(json.dumps(out, ensure_ascii=False))
 
@@ -280,6 +281,14 @@ class Handler(BaseHTTPRequestHandler):
             return reply(json.dumps({
                 "prompt": KREA_PROMPT_V1,
                 "notes": "按 Krea 2 的散文式写法整理，突出黄昏逆光",
+            }, ensure_ascii=False))
+
+        # ---- 构图冲突剧本：留白（negative_space）和广角（wide_shot）同时出现 ----
+        if "negspace" in model.lower():
+            return reply(json.dumps({
+                "positive": ["1girl", "negative_space", "wide_shot", "sky"],
+                "negative": ["worst_quality"],
+                "notes": "留白与广角冲突，negative_space 该移入候选",
             }, ensure_ascii=False))
 
         # ---- 排序剧本：故意乱序（场景/风格在前、人物在后），验证服务端会重排 ----

@@ -167,6 +167,7 @@ AGENT_EXTRA = """
   3. 把打算使用的 tag 用 validate_tags 批量确认一遍，不存在的换成候选或删掉
   4. 确认无误后，输出最终 JSON
 注意：查证要节制，最多查询 4~6 次；确认完就立刻输出结果，不要反复查同一个词。
+如果提示里已经给出「计划预查」的本地查词结果，那些词已经查过，不要重复查这些词，只查计划外的新概念。
 你最后一次回复必须是最终 JSON（形如 {"positive": [...], "negative": [...], "notes": "..."}），
 不要再附带任何工具调用。
 """
@@ -183,7 +184,8 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
     "validity": 0-5 整数（tag 有效：是否都在词表里、有没有自造词）,
     "ordering": 0-5 整数（排序：人物/外貌/表情动作是否在背景、风格之前）,
     "redundancy": 0-5 整数（冗余：有没有重复或互相矛盾的 tag）,
-    "constraints": 0-5 整数（约束：正向 25~45 个、负向 4~12 个、格式与权重写法）
+    "constraints": 0-5 整数（约束：正向 25~45 属正常，只有 >45 或 <15 才提示数量问题；
+                  负向 4~12 个；格式与权重写法）
   },
   "problems": ["具体问题，最多 5 条，没有就空数组"],
   "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条（要包含构图/留白/氛围/材质/媒介这类抽象项）"],
@@ -196,7 +198,8 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 - 描述里的关键要素是否都覆盖了（人数构图/外貌/表情动作/服装/场景/光照/镜头/风格）
 - 有没有互相矛盾或重复的 tag（如同时 solo 和 2girls、短发和长发）
 - 有没有模型不认识的自造词；有没有把「背景/场景」类 tag 排到人物前面
-- 数量是否合理（正向 25~45 个，负向 4~12 个）
+- 数量口径：正向 25~45 个属正常范围，只有 >45 或 <15 才提示数量问题；
+  35 个是正常值，不要因为「看着多」就报超上限。负向 4~12 个。
 
 【改写规则】（最重要）
 - 只修改 problems / missing 指出的项；其余 tag 原样保留、顺序不变；不要重新组织整段。
@@ -249,10 +252,12 @@ CONCEPT_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念
 
 请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
 {
-  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"]
+  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~6 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"]
 }
 
 注意：
+- 每条必须是**短名词（2~6 个字）**，禁止短语：不要「机能风外套」，要「机能风」「外套」。
+  长短语在词表里基本查不到，等于白抽；宁可拆成两个短名词。
 - 只抽概念（中文优先），不要写英文 tag，也不要在这里输出最终 tag 清单。
 - 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项：它们也是画面要素，
   而且往往正是最终提示词最容易漏掉的东西。
@@ -266,7 +271,7 @@ CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的�
 
 请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
 {
-  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"],
+  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~6 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"],
   "elements": ["画面里真正可画的要素，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑"],
   "queries": ["为了确认英文写法，打算去词表里查的中文或英文关键词，最多 6 条"]
 }
@@ -274,6 +279,8 @@ CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的�
 注意：
 - 这个规划只用于展示，不会自动执行；不要输出 tag 本身，也不要输出最终 JSON 结果。
 - queries 要具体，指向描述里「这个英文怎么说才准」的要素。
+- concepts 每条必须是**短名词（2~6 个字）**，禁止短语：不要「机能风外套」，
+  要「机能风」「外套」。长短语在词表里基本查不到，等于白抽。
 - concepts 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项，它们的英文写法
   往往最难猜、也最容易被漏掉。
   例 1：「画面右下角留白很多」→ 抽出「留白」「构图」；
@@ -597,6 +604,143 @@ def synonym_tag(concept):
     return str(hit.get("tag") or "").strip() or None
 
 
+# 概念切分：长概念（≥5 字）先按已知词条做最长匹配，最多切 3 段再逐段映射。
+# 4 字以内不切：短词切碎后更容易撞上无关词条（「量子猫娘」切出「量子」就误命中了）。
+_CONCEPT_SPLIT_MIN_LEN = 5
+_CONCEPT_SEGMENT_MAX = 3
+_CONCEPT_SEGMENT_MAX_LEN = 8
+# 切出来的段至少要覆盖原概念这么多（按字数），否则视为「不是长名词」不切
+_CONCEPT_SPLIT_MIN_COVER = 0.6
+
+
+def _concept_rows(concept):
+    """概念在词表里的通用分类候选（搜索失败返回空列表，不抛异常）。"""
+    try:
+        return [r for r in search_tags(concept, limit=12) if _is_general(r)]
+    except Exception:  # noqa: BLE001 - 词表没建好时按查不到处理
+        return []
+
+
+def _containment_hit(rows, concept):
+    """包含式匹配：候选中文名包含概念，或概念包含候选中文名（≥2 字）。
+
+    只认词表里真实存在、且是通用分类的 tag（每次都重新 get_tag：
+    画师 / 作品 / 角色分类一律排除）；命中返回词表记录，否则 None。
+    """
+    c = str(concept or "").strip()
+    if len(c) < 2:
+        return None
+    for row in (rows or []):
+        name = str((row or {}).get("tag") or "").strip()
+        if not name:
+            continue
+        hit = get_tag(name)
+        if not (hit and _is_general(hit)):
+            continue
+        cn = str(hit.get("cn") or "").strip()
+        if not cn:
+            continue
+        parts = [p for p in re.split(r"[/、,，;；\s]+", cn) if len(p) >= 2]
+        if cn != c and any(c in p for p in parts):
+            return hit
+        if any(p in c for p in parts):
+            return hit
+    return None
+
+
+def split_concept_segments(concept, max_segments=_CONCEPT_SEGMENT_MAX):
+    """把长中文概念按已知词条做「最长匹配」切分（最多 3 段）。
+
+    例：「机能风外套」→ ["机能风", "外套"]；找不到 2 段以上就返回 []（不硬切）。
+    切完还不够覆盖原概念 6 成时也返回 []：随便一串字总能凑出几个短词，
+    覆盖不足说明这大概不是「长名词」，硬切只会确认一堆无关 tag。
+    """
+    text = " ".join(str(concept if concept is not None else "").split()).strip()
+    if len(text) < _CONCEPT_SPLIT_MIN_LEN:
+        return []
+    segs, i = [], 0
+    while i < len(text) and len(segs) < max(1, int(max_segments)):
+        found = ""
+        for j in range(min(len(text), i + _CONCEPT_SEGMENT_MAX_LEN), i + 1, -1):
+            piece = text[i:j]
+            if len(piece) < 2:
+                continue
+            hit = resolve_alias(piece)
+            if hit and _is_general(hit):
+                found = piece
+                break
+        if found:
+            segs.append(found)
+            i += len(found)
+        else:
+            i += 1
+    if len(segs) < 2:
+        return []
+    covered = sum(len(s) for s in segs)
+    if covered < len(text) * _CONCEPT_SPLIT_MIN_COVER:
+        return []
+    return segs
+
+
+def _lookup_concept(concept):
+    """单段精确映射（规则 1~5）。返回 (命中记录, 搜索候选)，命中时候选为 None。"""
+    hit = get_tag(concept)
+    if not (hit and _is_general(hit)):
+        hit = None
+        alias_hit = resolve_alias(concept)
+        if alias_hit and _is_general(alias_hit) and _is_exact_concept(concept, alias_hit):
+            hit = alias_hit
+
+    if hit:
+        return hit, None
+
+    # 同义词兜底：留白 → negative_space 这类词表按中文名查不到的概念
+    syn = synonym_tag(concept)
+    if syn:
+        hit = get_tag(syn)
+        if hit:
+            return hit, None
+
+    rows = _concept_rows(concept)
+    if rows and _is_exact_concept(concept, rows[0]):
+        return rows[0], rows
+    if rows and len(concept) >= 2:
+        # 只对「中文名以概念结尾」的候选做泛化，避免乱猜
+        for r in rows[:6]:
+            cn = str(r.get("cn") or "")
+            if cn.endswith(concept):
+                base = _generalize_tag(r.get("tag"))
+                if base:
+                    return base, rows
+    return None, rows
+
+
+def _map_one_concept(concept):
+    """把一个概念映射成 [(概念, tag), ...]；确认不了返回空列表。
+
+    先走精确规则，再走包含式匹配，最后（只有长概念）切段逐段映射。
+    """
+    hit, rows = _lookup_concept(concept)
+    if hit:
+        return [(concept, str(hit.get("tag") or "").strip())]
+
+    # 包含式匹配：候选 tag 的中文名和概念互相包含（过膝袜 / 休闲西装 这类）
+    contain = _containment_hit(rows if rows is not None else _concept_rows(concept), concept)
+    if contain:
+        return [(concept, str(contain.get("tag") or "").strip())]
+
+    picks = []
+    for seg in split_concept_segments(concept):
+        seg_hit, seg_rows = _lookup_concept(seg)
+        if not seg_hit:
+            seg_hit = _containment_hit(seg_rows if seg_rows is not None
+                                       else _concept_rows(seg), seg)
+        tag = str((seg_hit or {}).get("tag") or "").strip()
+        if tag:
+            picks.append((seg, tag))
+    return picks
+
+
 def map_concepts(concepts, limit=3, with_candidates=True):
     """把概念逐个映射到词表（纯本地，不调模型）。
 
@@ -607,60 +751,45 @@ def map_concepts(concepts, limit=3, with_candidates=True):
       4. search_tags(概念)：只留通用分类；首条精确 → 已确认
       5. 候选中文名以概念结尾时，剥掉颜色/数量等修饰前缀，能还原成词表里的
          更通用 tag → 已确认（例：过膝袜 → black_thighhighs → thighhighs）
-      6. 都不成立 → 未确认，候选取前 3 个通用分类结果（可能为空）
+      6. 包含式匹配：候选中文名包含概念（或概念包含候选中文名）、且是通用分类
+         → 已确认（例：外套 → 休闲西装外套 / blazer）；映射前一律重新过 get_tag
+      7. 长概念（≥5 字）先按已知词条做最长匹配切分（最多 3 段），再逐段走 1~6
+         （例：机能风外套 → 机能风 / 外套）
+      8. 都不成立 → 未确认，候选取前 3 个通用分类结果（可能为空）
     with_candidates=False 时不再为未确认概念查候选（自省兜底用，省掉多余全表扫描）。
     返回 {"confirmed": [{concept, tag}], "unknown": [{concept, candidates}]}。
     """
     confirmed, unknown = [], []
     seen_tags = set()
+
+    def add_confirmed(pairs):
+        for concept, tag in pairs:
+            if not tag or tag in seen_tags:
+                continue
+            seen_tags.add(tag)
+            confirmed.append({"concept": concept, "tag": tag})
+
     for raw in (concepts or []):
         concept = " ".join(str(raw if raw is not None else "").split()).strip()
         if not concept:
             continue
 
-        hit = get_tag(concept)
-        if not (hit and _is_general(hit)):
-            hit = None
-            alias_hit = resolve_alias(concept)
-            if alias_hit and _is_general(alias_hit) and _is_exact_concept(concept, alias_hit):
-                hit = alias_hit
-
-        if not hit:
-            # 同义词兜底：留白 → negative_space 这类词表按中文名查不到的概念
-            syn = synonym_tag(concept)
-            if syn:
-                hit = get_tag(syn)
-
-        if not hit:
-            rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
-            if rows and _is_exact_concept(concept, rows[0]):
-                hit = rows[0]
-            elif rows:
-                # 只对「中文名以概念结尾」的候选做泛化，避免乱猜
-                for r in rows[:6]:
-                    cn = str(r.get("cn") or "")
-                    if len(concept) >= 2 and cn.endswith(concept):
-                        base = _generalize_tag(r.get("tag"))
-                        if base:
-                            hit = base
-                            break
-
-        if hit:
-            tag = str(hit.get("tag") or "").strip()
-            if not tag or tag in seen_tags:
-                continue
-            seen_tags.add(tag)
-            confirmed.append({"concept": concept, "tag": tag})
+        picks = _map_one_concept(concept)
+        if picks:
+            add_confirmed(picks)
             continue
 
         if not with_candidates:
             unknown.append({"concept": concept, "candidates": []})
             continue
 
-        rows = [r for r in search_tags(concept, limit=12) if _is_general(r)]
+        rows = _concept_rows(concept)
         if not rows:
             # 搜不到时再用相近候选兜底（suggest_for 内部也是走 search_tags）
-            rows = [r for r in suggest_for(concept, 8) if _is_general(r)]
+            try:
+                rows = [r for r in suggest_for(concept, 8) if _is_general(r)]
+            except Exception:  # noqa: BLE001
+                rows = []
         candidates, seen_c = [], set()
         for r in rows:
             t = str(r.get("tag") or "").strip()
@@ -920,11 +1049,11 @@ def split_new_tags(valid, prev_tags=None, pool=None):
     return keep, cands
 
 
-def plan_prefetch(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_QUERY):
-    """计划预查：本地逐条 search_tags，拼成一段注入用的提示词（不调模型）。
+def prefetch_scan(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_QUERY):
+    """计划预查的底层扫描：本地逐条 search_tags，返回 (pairs, misses)。
 
-    命中 → 「中文→tag, tag」；搜不到 → 记进「未命中」，绝不编造。
-    任何查询失败都按未命中处理，不抛异常；没有可用条目时返回空字符串。
+    pairs = [(查询词, [tag, ...])]，misses = [查不到的词]。
+    任何查询失败都按未命中处理，不抛异常。
     """
     max_q = max(0, int(limit))
     per = max(1, int(per_query))
@@ -946,6 +1075,11 @@ def plan_prefetch(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_
             pairs.append((query, tags))
         else:
             misses.append(query)
+    return pairs, misses
+
+
+def _prefetch_block(pairs, misses):
+    """把预查结果拼成注入用的提示词段；没有可用条目时返回空字符串。"""
     if not pairs and not misses:
         return ""
     body = "；".join("%s→%s" % (q, ", ".join(tags)) for q, tags in pairs)
@@ -953,7 +1087,50 @@ def plan_prefetch(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_
         body += ("；" if body else "") + "未命中：" + "、".join(misses)
     return ("\n【计划预查】" + body + "\n"
             "上面是本地词表预查结果：命中的写法直接可用；"
-            "标「未命中」的方向不要编造 tag，换个说法或整条省略。\n")
+            "标「未命中」的方向不要编造 tag，换个说法或整条省略。\n"
+            "以上已由本地词表查过，不要重复查这些词；只查计划外的新概念。\n")
+
+
+def plan_prefetch(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_QUERY):
+    """计划预查：本地逐条 search_tags，拼成一段注入用的提示词（不调模型）。
+
+    命中 → 「中文→tag, tag」；搜不到 → 记进「未命中」，绝不编造。
+    任何查询失败都按未命中处理，不抛异常；没有可用条目时返回空字符串。
+    """
+    pairs, misses = prefetch_scan(queries, limit=limit, per_query=per_query)
+    return _prefetch_block(pairs, misses)
+
+
+def plan_prefetch_detail(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_QUERY):
+    """预查的完整结果：注入段 + 命中的 tag + 命中/未命中统计。
+
+    给轨迹（可见）和候选池（可复用）用，本身仍然不调模型。
+    """
+    pairs, misses = prefetch_scan(queries, limit=limit, per_query=per_query)
+    tags, seen = [], set()
+    for _, row_tags in pairs:
+        for tag in row_tags:
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tags.append(tag)
+    return {"block": _prefetch_block(pairs, misses), "tags": tags,
+            "hit": len(pairs), "miss": len(misses), "miss_words": list(misses),
+            "queries": len(pairs) + len(misses)}
+
+
+def prefetch_trace_summary(detail):
+    """预查轨迹的一句话摘要，例如「6 个方向：命中 4、未命中 2（雨棚、蒸汽）」。"""
+    detail = detail or {}
+    total = int(detail.get("queries") or 0)
+    hit = int(detail.get("hit") or 0)
+    miss = int(detail.get("miss") or 0)
+    text = "%d 个方向：命中 %d、未命中 %d" % (total, hit, miss)
+    words = [str(w).strip() for w in (detail.get("miss_words") or []) if str(w).strip()]
+    if miss and words:
+        text += "（%s）" % "、".join(words)
+    return text
 
 
 def _brief_tag(h):
@@ -1136,15 +1313,18 @@ def prompt_style_warnings(prompt):
 # 服务端确定性排序：不依赖模型有没有按顺序输出。
 # 分组顺序（组内保持原顺序，无法分类的放最后）：
 #   质量词 → 人数/构图 → 人物特征(发/眼/服装) → 动作/表情
-#          → 场景 → 背景 → 光照 → 风格/媒介 → 未分类
+#          → 构图/留白 → 场景 → 背景 → 光照 → 风格/媒介 → 未分类
+# 「构图/留白」是独立小组：它属于构图，但和人数不是一回事 —— 早期把它塞进
+# 人数组，结果 negative_space 常被排到人物特征前面，画面直接空掉。
 ORDER_QUALITY = 0
 ORDER_COUNT = 1
 ORDER_CHARACTER = 2
 ORDER_ACTION = 3
-ORDER_SCENE = 4
-ORDER_BACKGROUND = 5
-ORDER_LIGHT = 6
-ORDER_STYLE = 7
+ORDER_NEGSPACE = 4
+ORDER_SCENE = 5
+ORDER_BACKGROUND = 6
+ORDER_LIGHT = 7
+ORDER_STYLE = 8
 ORDER_OTHER = 9
 
 ORDER_GROUP_NAMES = {
@@ -1152,6 +1332,7 @@ ORDER_GROUP_NAMES = {
     ORDER_COUNT: "人数/构图",
     ORDER_CHARACTER: "人物特征",
     ORDER_ACTION: "动作/表情",
+    ORDER_NEGSPACE: "构图/留白",
     ORDER_SCENE: "场景",
     ORDER_BACKGROUND: "背景",
     ORDER_LIGHT: "光照",
@@ -1165,9 +1346,10 @@ _COUNT_TAGS = {
     "1boy", "2boys", "3boys", "4boys", "5boys", "6+boys",
     "solo", "solo_focus", "multiple_girls", "multiple_boys", "multiple_others",
     "no_humans", "group", "duo", "trio", "everyone", "male_focus", "female_focus",
-    # 留白 / 负空间也是构图项（用户实测里最常被漏的那个）
-    "negative_space",
 }
+
+# 构图 / 留白：单独一组（动作之后、场景之前），别抢到人物前面去
+_NEGSPACE_TAGS = {"negative_space"}
 
 _COUNT_WORDS = {
     "shot", "close", "closeup", "portrait", "profile", "pov", "angle", "framing",
@@ -1298,6 +1480,9 @@ def tag_order_group(tag, category=None):
         return ORDER_CHARACTER
     if category in (1, 3):
         return ORDER_STYLE
+    # 构图/留白：独立小组，位置固定在动作之后、场景之前（不再混进人数/构图）
+    if name in _NEGSPACE_TAGS:
+        return ORDER_NEGSPACE
     words = _tag_words(name)
     if words & _BACKGROUND_WORDS:
         return ORDER_BACKGROUND
@@ -1355,6 +1540,34 @@ def reorder_hits(hits):
         if bucket:
             out.append(bucket.pop(0))
     return out
+
+
+# 和「留白」打架的构图 tag：一边要求大面积空，一边要求广角/全身，画面必然互相抵消。
+_NEGSPACE_CONFLICT_TAGS = {"wide_shot", "full_body"}
+
+NEGSPACE_CONFLICT_SUMMARY = "留白 vs 广角/全身，已移入候选"
+
+
+def resolve_negative_space_conflict(positive):
+    """留白与广角/全身同现 → 把 negative_space 挑出来（进候选补充，不进正向）。
+
+    纯本地、确定性；返回 (留下的 hits, 被移出的 hits)。没有冲突时原样返回。
+    """
+    hits = list(positive or [])
+    names = {str((h or {}).get("tag") or "").strip().lower() for h in hits}
+    if not (names & _NEGSPACE_TAGS) or not (names & _NEGSPACE_CONFLICT_TAGS):
+        return hits, []
+    keep, moved = [], []
+    for h in hits:
+        tag = str((h or {}).get("tag") or "").strip().lower()
+        (moved if tag in _NEGSPACE_TAGS else keep).append(h)
+    return keep, moved
+
+
+def negative_space_conflict_trace():
+    """构图冲突的轨迹条目（位置：发生冲突的那次整理之后）。"""
+    return {"round": 0, "tool": "构图冲突", "args": {},
+            "summary": NEGSPACE_CONFLICT_SUMMARY}
 
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
@@ -1431,6 +1644,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     # 失败只记轨迹，生成照常继续。
     plan_info = None
     concept_map = None
+    prefetch_tags = []          # 预查命中的 tag：进候选池，供自省复用
     strict_on = bool(strict) and not natural
     if plan or strict_on:
         concepts, concept_err = [], ""
@@ -1456,11 +1670,15 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                 % (len(plan_info["elements"]), len(plan_info["queries"])), 5.5)
             # 计划预查：本地按 queries 查一遍词表，把结果提前给模型（不调模型、加了也不算调用）
             if not natural:
-                prefetch = plan_prefetch(plan_info.get("queries") or [])
-                if prefetch:
-                    system += prefetch
-                    say("计划预查：%d 个查词方向已在本地词表查过"
-                        % min(len(plan_info.get("queries") or []), _PREFETCH_MAX_QUERIES), 5.6)
+                detail = plan_prefetch_detail(plan_info.get("queries") or [])
+                if detail["block"]:
+                    system += detail["block"]
+                    prefetch_tags = detail["tags"]
+                    # 轨迹里留一条：可见，且位置在概念核对之前
+                    trace.append({"round": 0, "tool": "计划预查", "args": {},
+                                  "summary": prefetch_trace_summary(detail)})
+                    say("计划预查：%d 个查词方向已在本地词表查过（命中 %d）"
+                        % (detail["queries"], detail["hit"]), 5.6)
         elif plan and not plan_info:
             # 合并调用失败 / 只拿到概念没拿到计划：计划降级，但不影响生成
             trace.append({"round": 0, "tool": "计划", "args": {},
@@ -1661,12 +1879,16 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         out["plan"] = plan_info
     if reflect:
         say("进入自省环节：让审核员给这套 tag 打分", 66)
-        # 可新增池：概念核对已确认的 tag + 相近候选（纯本地，不调模型）
+        # 可新增池：概念核对已确认的 tag + 计划预查命中的 tag + 相近候选
+        # （三者同级；纯本地，不调模型）
         pool_tags = []
+        pool_seed = []
         if concept_map:
+            pool_seed.extend(c.get("tag") for c in (concept_map.get("confirmed") or []))
+        pool_seed.extend(prefetch_tags)
+        if pool_seed:
             try:
-                pool_tags = build_add_pool([c.get("tag") for c in
-                                            (concept_map.get("confirmed") or [])])
+                pool_tags = build_add_pool(pool_seed)
             except Exception:  # noqa: BLE001 - 池建不出来就退回旧行为
                 pool_tags = []
         try:
@@ -1693,6 +1915,14 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             say("自省没跑完：%s" % e)
     # 自省可能改过正向列表：最终再排一次，保证任何路径出来的顺序都一致
     out["positive"] = reorder_hits(out["positive"])
+    # 构图冲突：留白与广角/全身同时出现会把画面抵消掉 —— 留白降级成候选，不进正向
+    keep, moved = resolve_negative_space_conflict(out["positive"])
+    if moved:
+        out["positive"] = keep
+        out["positive_candidates"] = reorder_hits(
+            list(out.get("positive_candidates") or []) + moved)
+        trace.append(negative_space_conflict_trace())
+        out["stats"]["candidates"] = len(out["positive_candidates"])
     # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
     out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
     say("完成：正向 %d 个、负向 %d 个" % (len(out["positive"]), len(out["negative"])), 97)
