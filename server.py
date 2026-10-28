@@ -28,7 +28,7 @@ from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_cou
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, prompt_style_warnings, reorder_hits, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, plan_generate, plan_prefetch, prompt_style_warnings, reorder_hits, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -413,6 +413,12 @@ class Handler(BaseHTTPRequestHandler):
                     model=(cfg.get("model") or "").strip())
                 concept_stats, concept_block, concept_trace = _single_concept_parts(
                     concepts, concept_err)
+            # 计划预查：本地查词表，把结果拼进注入段（不调模型、加了也不算调用）。
+            # Krea2 不做（沿用「计划只展示」）。
+            if plan_info and not natural:
+                prefetch = plan_prefetch(plan_info.get("queries") or [])
+                if prefetch:
+                    concept_block = prefetch + (concept_block or "")
             try:
                 content, parsed, usage = call_llm(
                     cfg, text,
@@ -449,6 +455,7 @@ class Handler(BaseHTTPRequestHandler):
                         }
             elif not parsed or not isinstance(parsed, dict):
                 res = {"raw": content, "parsed": None,
+                       "positive_candidates": [],
                        "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
             else:
                 pos = [str(t).strip() for t in (parsed.get("positive") or []) if str(t).strip()]
@@ -464,6 +471,8 @@ class Handler(BaseHTTPRequestHandler):
                     "raw": content,
                     "positive": valid,
                     "positive_unknown": unknown,
+                    # 单次生成没有自省改写，候选补充就是空数组（结构保持一致）
+                    "positive_candidates": [],
                     "negative": valid_neg,
                     "negative_unknown": unknown_neg,
                     "notes": parsed.get("notes", ""),
@@ -535,6 +544,7 @@ class Handler(BaseHTTPRequestHandler):
             valid, unknown = validate_tags(pos)
             valid_neg, unknown_neg = validate_tags(neg)
             result = {"positive": valid, "positive_unknown": unknown,
+                      "positive_candidates": [],
                       "negative": valid_neg, "negative_unknown": unknown_neg,
                       "stats": {"llm_calls": 0, "tool_calls": 0}}
             try:
@@ -548,6 +558,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "review": review,
                 "positive": result["positive"], "positive_unknown": result["positive_unknown"],
+                "positive_candidates": result.get("positive_candidates") or [],
                 "negative": result["negative"], "negative_unknown": result["negative_unknown"],
                 "stats": result["stats"],
             })

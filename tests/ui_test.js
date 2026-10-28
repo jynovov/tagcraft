@@ -371,6 +371,48 @@ chk('没有工具轨迹时概念摘要单独显示',
     document.getElementById('traceBox').hidden === false &&
     document.getElementById('trace').innerHTML.indexOf('已确认 5 个') >= 0);
 
+/* ---------- 19. 候选补充：渲染 / 点击加入 / 存盘 ---------- */
+localStorage.clear();
+state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
+state.candidates = [{ tag: 'sunset', cn: '夕阳', category: 0, post_count: 1200, weight: 1 }];
+state.notes = ''; state.stats = null; state.trace = []; state.review = null; state.plan = null;
+render();
+chk('候选非空时显示候选组', document.getElementById('candGroup').hidden === false);
+chk('候选组渲染出 tag',
+    document.getElementById('candTags').innerHTML.indexOf('sunset') >= 0,
+    document.getElementById('candTags').innerHTML);
+chk('候选组计数正确',
+    String(document.getElementById('candCount').textContent) === '1',
+    document.getElementById('candCount').textContent);
+chk('候选写进上次状态',
+    (JSON.parse(localStorage.getItem('tagcraft.cur')).candidates || []).length === 1);
+chk('候选默认不进正向', state.positive.length === 0);
+document.getElementById('candTags').querySelectorAll('[data-cand]')[0].click();
+chk('点击候选后加入正向',
+    state.positive.length === 1 && state.positive[0].tag === 'sunset',
+    JSON.stringify(state.positive));
+chk('点击后候选被移走', state.candidates.length === 0);
+chk('候选空了就收起候选组', document.getElementById('candGroup').hidden === true);
+chk('正向输出里出现候选 tag',
+    document.getElementById('outPos').value.indexOf('sunset') >= 0,
+    document.getElementById('outPos').value);
+state.candidates = [];
+render();
+chk('没有候选时不渲染候选组', document.getElementById('candGroup').hidden === true);
+
+state.quality = []; state.positive = []; state.candidates = []; state.negative = [];
+applyResult({ positive: [], negative: [], positive_unknown: [], negative_unknown: [],
+              positive_candidates: [{ tag: 'orange_sky', cn: '橙色天空', category: 0,
+                                      post_count: 9 }] });
+chk('applyResult 透传 positive_candidates',
+    state.candidates.length === 1 && state.candidates[0].tag === 'orange_sky',
+    JSON.stringify(state.candidates));
+render();
+chk('透传后候选组可见', document.getElementById('candGroup').hidden === false);
+chk('候选带上中文名',
+    document.getElementById('candTags').innerHTML.indexOf('橙色天空') >= 0,
+    document.getElementById('candTags').innerHTML);
+
 return R;
 })();`;
 

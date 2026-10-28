@@ -187,6 +187,7 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
   },
   "problems": ["具体问题，最多 5 条，没有就空数组"],
   "missing": ["中文描述里有、但 tag 没体现的要素，最多 5 条（要包含构图/留白/氛围/材质/媒介这类抽象项）"],
+  "add_concepts": ["中文概念（可选）：想补、但【可新增池】里没有的要素，最多 3 条；下一轮会去词表找写法"],
   "positive": ["修正后的正向 tag，按重要性从高到低"],
   "negative": ["修正后的负向 tag"]
 }
@@ -201,6 +202,8 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 - 只修改 problems / missing 指出的项；其余 tag 原样保留、顺序不变；不要重新组织整段。
 - 没被点名的 tag，哪怕你觉得还能更好，也不要增删、换位或改写。
 - 宁可少改，也不要为了「看起来更整齐」而重排整段。
+- 新增 tag 只能从 user 消息里的【可新增池】里挑；池里没有的，先把中文概念写进
+  add_concepts 字段，不要直接编 tag（编出来的词会被程序挑出去，不会进正向）。
 
 【评分锚点】（拿不准分数时对照这两段校准）
 · 约 60 分：主体和场景都在，但漏了「回头看向镜头」，混进 3 个词表查不到的自造词，
@@ -282,6 +285,14 @@ CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的�
 _PLAN_MAX_ELEMENTS = 12
 _PLAN_MAX_QUERIES = 10
 _CONCEPT_MAX = 25
+
+# 计划预查：服务端本地查词（不调模型），把结果提前塞给模型
+_PREFETCH_MAX_QUERIES = 10
+_PREFETCH_PER_QUERY = 6
+
+# 可新增池：已确认 / missing 映射出的 tag + 它们的相近候选
+_POOL_SUGGEST_N = 3
+_POOL_PROMPT_MAX = 40
 
 
 # ---- 自省分项：每项 0~5 整数，服务端按权重折算成 0~100 ----
@@ -784,6 +795,167 @@ def missing_prompt_block(pairs, current=None, limit=8):
               "其它 tag 保持原样、顺序不变。\n\n")
 
 
+def _merge_pool(pool, extra):
+    """合并两个 tag 列表：去空、去重（不分大小写）、保持加入顺序。"""
+    out, seen = [], set()
+    for raw in list(pool or []) + list(extra or []):
+        tag = " ".join(str(raw if raw is not None else "").split()).strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag)
+    return out
+
+
+def build_add_pool(tags=None, suggest_n=_POOL_SUGGEST_N):
+    """构造「可新增池」：已确认 tag / missing 映射结果 + 它们的相近候选。
+
+    只收词表里真实存在的 tag（质量词另有放行规则，不靠这个池）；
+    返回去重后的 tag 列表，保持加入顺序。词表没建好时返回空列表，不抛异常。
+    """
+    verified = []
+    for raw in (tags or []):
+        try:
+            hit = get_tag(str(raw if raw is not None else "").strip())
+        except Exception:  # noqa: BLE001 - 词表异常不能拖垮自省
+            hit = None
+        if hit:
+            verified.append(str(hit.get("tag") or "").strip())
+    pool = _merge_pool([], verified)
+    extra = []
+    for seed in pool[:_POOL_PROMPT_MAX]:
+        try:
+            rows = suggest_for(seed, max(1, int(suggest_n)))
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            extra.append((r or {}).get("tag"))
+    return _merge_pool(pool, extra)
+
+
+def concepts_to_pool_tags(concepts, limit=3):
+    """把自省给的 add_concepts（中文概念）映射成「下一轮可新增」的词表 tag。
+
+    只进候选池，本轮不直接放行；词表里查不到的概念直接丢掉（不编造）。
+    """
+    per = max(1, min(3, int(limit)))
+    out = []
+    for raw in (concepts or [])[:5]:
+        concept = " ".join(str(raw if raw is not None else "").split()).strip()
+        if not concept:
+            continue
+        tags = []
+        try:
+            syn = synonym_tag(concept)
+        except Exception:  # noqa: BLE001
+            syn = None
+        if syn:
+            tags.append(syn)
+        try:
+            rows = search_tags(concept, limit=12)
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            if not _is_general(r):
+                continue
+            tag = str((r or {}).get("tag") or "").strip()
+            if tag:
+                tags.append(tag)
+            if len(tags) >= per:
+                break
+        if not tags:
+            try:
+                for r in suggest_for(concept, per * 3):
+                    if not _is_general(r):
+                        continue
+                    tag = str((r or {}).get("tag") or "").strip()
+                    if tag:
+                        tags.append(tag)
+                    if len(tags) >= per:
+                        break
+            except Exception:  # noqa: BLE001
+                pass
+        out.extend(tags)
+    return _merge_pool([], out)
+
+
+def add_pool_prompt_block(pool, limit=_POOL_PROMPT_MAX):
+    """把「可新增池」拼成改写指令里的一段（池为空就返回空字符串）。"""
+    tags = [str(t).strip() for t in (pool or []) if str(t).strip()]
+    if not tags:
+        return ""
+    shown = tags[:max(1, int(limit))]
+    more = ("…（还有 %d 个）" % (len(tags) - len(shown))) if len(tags) > len(shown) else ""
+    return ("\n【可新增池】本轮如需新增 tag，只能从下面这些（词表已确认）里选；"
+            "池里没有的，先把中文概念写进 add_concepts 字段，不要直接编 tag：\n"
+            "  " + ", ".join(shown) + more + "\n\n")
+
+
+def split_new_tags(valid, prev_tags=None, pool=None):
+    """白名单：把本轮新出现、又不在「允许集合」里的 tag 挑成候选补充。
+
+    允许集合 = 上一轮正向 + 可新增池 + 质量词。新增词不在集合里、但词表存在
+    （validate_tags 通过）→ positive_candidates；词表不存在的由 validate_tags
+    自己放进 positive_unknown，不在这里处理。
+    可新增池为空时不做限制：没有可挑的词还硬卡，只会让改写卡死（沿用旧行为）。
+    返回 (留在正向的, 候选补充的)。
+    """
+    valid = list(valid or [])
+    pool_tags = [str(t).strip() for t in (pool or []) if str(t).strip()]
+    if not pool_tags:
+        return valid, []
+    allowed = {t.lower() for t in pool_tags}
+    allowed |= {str(t).strip().lower() for t in (prev_tags or []) if str(t).strip()}
+    allowed |= QUALITY_TAGS
+    keep, cands = [], []
+    for hit in valid:
+        tag = str((hit or {}).get("tag") or "").strip()
+        if not tag or tag.lower() in allowed:
+            keep.append(hit)
+        else:
+            cands.append(hit)
+    return keep, cands
+
+
+def plan_prefetch(queries, limit=_PREFETCH_MAX_QUERIES, per_query=_PREFETCH_PER_QUERY):
+    """计划预查：本地逐条 search_tags，拼成一段注入用的提示词（不调模型）。
+
+    命中 → 「中文→tag, tag」；搜不到 → 记进「未命中」，绝不编造。
+    任何查询失败都按未命中处理，不抛异常；没有可用条目时返回空字符串。
+    """
+    max_q = max(0, int(limit))
+    per = max(1, int(per_query))
+    pairs, misses = [], []
+    for raw in (queries or [])[:max_q]:
+        query = " ".join(str(raw if raw is not None else "").split()).strip()
+        if not query:
+            continue
+        tags = []
+        try:
+            rows = search_tags(query, limit=per)
+        except Exception:  # noqa: BLE001 - 预查失败不能影响生成
+            rows = []
+        for r in rows:
+            tag = str((r or {}).get("tag") or "").strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+        if tags:
+            pairs.append((query, tags))
+        else:
+            misses.append(query)
+    if not pairs and not misses:
+        return ""
+    body = "；".join("%s→%s" % (q, ", ".join(tags)) for q, tags in pairs)
+    if misses:
+        body += ("；" if body else "") + "未命中：" + "、".join(misses)
+    return ("\n【计划预查】" + body + "\n"
+            "上面是本地词表预查结果：命中的写法直接可用；"
+            "标「未命中」的方向不要编造 tag，换个说法或整条省略。\n")
+
+
 def _brief_tag(h):
     """把一条词表记录压成短字符串，喂给模型省 token。"""
     if not h:
@@ -1258,6 +1430,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     # 都在查词循环之前做，最多只多调一次模型（两个都开时合并成一次）。
     # 失败只记轨迹，生成照常继续。
     plan_info = None
+    concept_map = None
     strict_on = bool(strict) and not natural
     if plan or strict_on:
         concepts, concept_err = [], ""
@@ -1281,6 +1454,13 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         if plan and plan_info:
             say("计划就绪：%d 个画面要素、%d 个查词方向"
                 % (len(plan_info["elements"]), len(plan_info["queries"])), 5.5)
+            # 计划预查：本地按 queries 查一遍词表，把结果提前给模型（不调模型、加了也不算调用）
+            if not natural:
+                prefetch = plan_prefetch(plan_info.get("queries") or [])
+                if prefetch:
+                    system += prefetch
+                    say("计划预查：%d 个查词方向已在本地词表查过"
+                        % min(len(plan_info.get("queries") or []), _PREFETCH_MAX_QUERIES), 5.6)
         elif plan and not plan_info:
             # 合并调用失败 / 只拿到概念没拿到计划：计划降级，但不影响生成
             trace.append({"round": 0, "tool": "计划", "args": {},
@@ -1293,6 +1473,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             stats["concepts_unknown"] = 0
             if concepts:
                 mapping = map_concepts(concepts)
+                concept_map = mapping
                 stats["concepts_confirmed"] = len(mapping["confirmed"])
                 stats["concepts_unknown"] = len(mapping["unknown"])
                 block = concepts_prompt_block(mapping)
@@ -1415,6 +1596,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         out = {"raw": content, "parsed": None, "trace": trace, "stats": stats,
                "tools_used": tools_ok,
                "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
+        if not natural:
+            out["positive_candidates"] = []
         if plan_info:
             out["plan"] = plan_info
         return out
@@ -1466,6 +1649,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     out = {
         "parsed": parsed, "raw": content,
         "positive": valid, "positive_unknown": unknown,
+        "positive_candidates": [],
         "negative": valid_neg, "negative_unknown": unknown_neg,
         "notes": parsed.get("notes", ""),
         "trace": trace, "stats": stats, "tools_used": tools_ok,
@@ -1477,9 +1661,17 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         out["plan"] = plan_info
     if reflect:
         say("进入自省环节：让审核员给这套 tag 打分", 66)
+        # 可新增池：概念核对已确认的 tag + 相近候选（纯本地，不调模型）
+        pool_tags = []
+        if concept_map:
+            try:
+                pool_tags = build_add_pool([c.get("tag") for c in
+                                            (concept_map.get("confirmed") or [])])
+            except Exception:  # noqa: BLE001 - 池建不出来就退回旧行为
+                pool_tags = []
         try:
             out["review"] = self_refine(cfg, text, out, rounds=reflect_rounds,
-                                        progress=say)
+                                        progress=say, pool=pool_tags)
             # 自省后重新校验一遍
             pos2 = [h["tag"] for h in out["positive"]]
             neg2 = [h["tag"] for h in out["negative"]]
@@ -1488,6 +1680,12 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             out["positive"], out["positive_unknown"] = valid2, unknown2
             out["negative"], out["negative_unknown"] = valid_neg2, unknown_neg2
             out["positive"] = reorder_hits(out["positive"])
+            # 候选补充：已经进了正向的就不再重复展示
+            pos_low = {str(h.get("tag") or "").lower() for h in out["positive"]}
+            cands = [c for c in (out.get("positive_candidates") or [])
+                     if str((c or {}).get("tag") or "").lower() not in pos_low]
+            out["positive_candidates"] = reorder_hits(cands)
+            out["stats"]["candidates"] = len(out["positive_candidates"])
             out["stats"]["checked"] = len(pos2) + len(neg2)
             out["stats"]["unknown"] = len(unknown2) + len(unknown_neg2)
         except Exception as e:  # noqa: BLE001
@@ -1501,8 +1699,13 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     return out
 
 
-def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
-    """B：把结果 + 词表校验报告交给模型自评，按需重写。"""
+def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None, pool=None):
+    """B：把结果 + 词表校验报告交给模型自评，按需重写。
+
+    pool 是「可新增池」（概念核对已确认 + missing 映射 + 相近候选，由调用方算好）。
+    池非空时，本轮新出现的 tag 只有在池里（或上一轮正向、或质量词）才留在正向，
+    池外但词表存在的进 positive_candidates；池为空时不限制新增（沿用旧行为）。
+    """
     def say(msg, pct=None):
         if progress:
             try:
@@ -1519,26 +1722,37 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
     history = []
     # 多轮评审里分数可能回落，最后要采用「得分最高」的那一轮结果
     best = {"score": -1, "round": None, "dimensions": None, "positive": None,
-            "positive_unknown": None, "negative": None, "negative_unknown": None}
+            "positive_unknown": None, "positive_candidates": None,
+            "negative": None, "negative_unknown": None}
     # 上一轮 missing 反向映射出的 tag：下一轮改写指令里「必须补上」
     forced = []
+    # 可新增池：概念核对已确认 tag / missing 映射结果 + 它们的相近候选
+    add_pool = list(pool or [])
+    result["positive_candidates"] = list(result.get("positive_candidates") or [])
+    # add_concepts 最多让自省多跑一轮，避免来回循环
+    extra_round_used = False
+    total_rounds = max(1, int(rounds))
+    i = 1
 
-    for i in range(1, max(1, int(rounds)) + 1):
-        say("自省第 %d/%d 轮：审核员评分中…" % (i, max(1, int(rounds))),
-            66.0 + (i - 1) * 28.0 / max(1, int(rounds)))
+    while i <= total_rounds:
+        say("自省第 %d/%d 轮：审核员评分中…" % (i, total_rounds),
+            66.0 + (i - 1) * 28.0 / max(1, total_rounds))
         pos = [h["tag"] for h in result["positive"]] + [u["tag"] for u in result["positive_unknown"]]
         neg = [h["tag"] for h in result["negative"]] + [u["tag"] for u in result["negative_unknown"]]
         bad = [u["tag"] for u in result["positive_unknown"]] + \
               [u["tag"] for u in result["negative_unknown"]]
         report = "词表校验：%d 个 tag 里 %d 个不在词表：%s" % (
             len(pos) + len(neg), len(bad), "、".join(bad) or "无")
+        rule = ("【改写要求】只修改 problems / missing 指出的项；其余 tag 原样保留、"
+                "顺序不变；不要重新组织整段。"
+                "如需新增 tag，只能从【可新增池】里选；池里没有的，"
+                "先把中文概念写进 add_concepts 字段，不要直接编 tag。\n\n"
+                "请审核并输出 JSON。")
         ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n"
-               "【当前负向 tag】\n%s\n\n【%s】\n\n"
-               "%s"
-               "【改写要求】只修改 problems / missing 指出的项；其余 tag 原样保留、"
-               "顺序不变；不要重新组织整段。\n\n请审核并输出 JSON。"
+               "【当前负向 tag】\n%s\n\n【%s】\n\n%s%s%s"
                % (text, ", ".join(pos), ", ".join(neg), report,
-                  missing_prompt_block(forced, pos)))
+                  missing_prompt_block(forced, pos),
+                  add_pool_prompt_block(add_pool), rule))
         body = _post_chat(cfg, {
             "model": model,
             "messages": [{"role": "system", "content": CRITIC_SYSTEM},
@@ -1553,7 +1767,8 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
         crit = _extract_json(content)
         if not crit:
             history.append({"round": i, "score": None, "dimensions": None,
-                            "problems": ["评审没返回 JSON"], "changed": 0})
+                            "problems": ["评审没返回 JSON"], "changed": 0,
+                            "candidates": 0, "add_concepts": []})
             break
 
         score, dims = _review_score(crit, TAG_DIM_WEIGHTS)
@@ -1563,23 +1778,32 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
                             "problems": ((crit.get("problems") or [])[:5]
                                          or ["评审没给分数"]),
                             "missing": (crit.get("missing") or [])[:5],
-                            "changed": 0})
+                            "changed": 0, "candidates": 0, "add_concepts": []})
             break
         new_pos = [str(t).strip() for t in (crit.get("positive") or []) if str(t).strip()]
         new_neg = [str(t).strip() for t in (crit.get("negative") or []) if str(t).strip()]
+        # 模型想补、但可新增池里没有的概念：只登记，下一轮再找词表写法
+        add_concepts = [str(c).strip() for c in (crit.get("add_concepts") or [])
+                        if str(c).strip()][:5]
         changed = 0
+        cands = []
         # 本轮分数相对「当前最高分」的增益；首次评审还没有最高分 → 不触发早停
         gain = None if best["score"] < 0 else score - best["score"]
         if new_pos or new_neg:
+            prev_pos = [h["tag"] for h in result["positive"]]
             old = set(pos) | set(neg)
             new = set(new_pos) | set(new_neg)
             changed = len(old ^ new)
             valid, unknown = validate_tags(new_pos or pos)
             valid_n, unknown_n = validate_tags(new_neg or neg)
-            result["positive"], result["positive_unknown"] = valid, unknown
+            # 新增词白名单：池内保留正向，池外但词表存在 → 候选补充
+            keep, picked = split_new_tags(valid, prev_pos, add_pool)
+            result["positive"], result["positive_unknown"] = keep, unknown
+            result["positive_candidates"] = picked
             result["negative"], result["negative_unknown"] = valid_n, unknown_n
             # 每轮改写后都重新排序（模型经常把场景/风格排到人物前面）
             result["positive"] = reorder_hits(result["positive"])
+            cands = reorder_hits(picked)
         missing = (crit.get("missing") or [])[:5]
         # missing（中文）反向映射成词表 tag，下一轮强制要求补上
         try:
@@ -1591,21 +1815,28 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             if tag not in seen_forced:
                 seen_forced.add(tag)
                 forced.append((concept, tag))
+        # 下一轮可新增池：missing 映射结果 + add_concepts 映射结果（含相近候选）
+        grow = [t for _, t in found] + concepts_to_pool_tags(add_concepts)
+        if grow:
+            add_pool = _merge_pool(add_pool, build_add_pool(grow))
         history.append({"round": i, "score": score,
                         "dimensions": dims,
                         "problems": (crit.get("problems") or [])[:5],
                         "missing": missing,
                         "missing_tags": [t for _, t in found],
+                        "candidates": len(cands),
+                        "add_concepts": add_concepts,
                         "changed": changed})
         if score > best["score"]:
             best = {"score": score, "round": i, "dimensions": dims,
                     "positive": result["positive"],
                     "positive_unknown": result["positive_unknown"],
+                    "positive_candidates": result["positive_candidates"],
                     "negative": result["negative"],
                     "negative_unknown": result["negative_unknown"]}
-        say("自省第 %d/%d 轮：%s 分，改动 %d 个 tag"
-            % (i, max(1, int(rounds)), score if score is not None else "—", changed),
-            66.0 + i * 28.0 / max(1, int(rounds)))
+        say("自省第 %d/%d 轮：%s 分，改动 %d 个 tag，候选补充 %d 个"
+            % (i, total_rounds, score if score is not None else "—", changed, len(cands)),
+            66.0 + i * 28.0 / total_rounds)
         # 收敛条件：分数够高、或这一轮没改动
         if score >= threshold:
             say("分数达到 %d，自省收敛" % threshold, 95)
@@ -1617,15 +1848,23 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             say("第 %d 轮增益 %+d 分（不足 %d 分），停止后续改写"
                 % (i, gain, _REFLECT_MIN_GAIN), 95)
             break
+        # 只有「最后一轮才收到 add_concepts」时才多跑一轮，最多加 1 轮
+        if add_concepts and not extra_round_used and i >= total_rounds:
+            extra_round_used = True
+            total_rounds = i + 1
+            say("模型给了 add_concepts，额外再查一轮词表", 95)
+        i += 1
 
     # 回退到得分最高的那一轮（低分轮只留在历史里，不覆盖最终结果）
     if best["positive"] is not None:
         result["positive"] = best["positive"]
         result["positive_unknown"] = best["positive_unknown"]
+        result["positive_candidates"] = best["positive_candidates"] or []
         result["negative"] = best["negative"]
         result["negative_unknown"] = best["negative_unknown"]
     # 无论走哪条路径，最终正向都按固定分组排好（评审失败也不影响）
     result["positive"] = reorder_hits(result["positive"])
+    result["positive_candidates"] = reorder_hits(result.get("positive_candidates") or [])
 
     last_score = history[-1]["score"] if history else None
     last_dims = history[-1].get("dimensions") if history else None
@@ -1633,6 +1872,7 @@ def self_refine(cfg, text, result, rounds=2, threshold=92, progress=None):
             "final_score": best["score"] if best["score"] >= 0 else last_score,
             "final_dims": best["dimensions"] if best["round"] else last_dims,
             "picked_round": best["round"],
+            "candidates": len(result["positive_candidates"]),
             "iterations": len(history)}
 
 

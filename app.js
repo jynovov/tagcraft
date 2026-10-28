@@ -6,6 +6,7 @@ const LS_PENDING = 'tagcraft.pending';
 const state = {
   quality: [],    // 质量词（单独一组）
   positive: [],   // 正向 tag
+  candidates: [], // 候选补充：自省想加、但不在可新增池里的词（词表存在，点一下进正向）
   negative: [],   // 负向 tag
   unknown: [],    // 未识别：{tag, suggestions, kind}
   notes: '',
@@ -44,6 +45,7 @@ function statePayload() {
     weight: $('useWeight').checked,
     quality: state.quality,
     positive: state.positive,
+    candidates: state.candidates,
     negative: state.negative,
     unknown: state.unknown,
     notes: state.notes,
@@ -71,6 +73,7 @@ function normalizeSaved(x) {
     weight: !!x.weight,
     quality: arr(x.quality),
     positive: arr(x.positive),
+    candidates: arr(x.candidates),
     negative: arr(x.negative),
     unknown: arr(x.unknown),
     notes: typeof x.notes === 'string' ? x.notes : '',
@@ -133,6 +136,7 @@ function applySaved(s) {
   $('useWeight').checked = !!d.weight;
   state.quality = d.quality || [];
   state.positive = d.positive || [];
+  state.candidates = d.candidates || [];
   state.negative = d.negative || [];
   state.unknown = d.unknown || [];
   state.notes = d.notes || '';
@@ -159,7 +163,8 @@ function curDraft() { return saved; }
 
 function resetView() {
   $('inputText').value = '';
-  state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
+  state.quality = []; state.positive = []; state.candidates = [];
+  state.negative = []; state.unknown = [];
   state.notes = ''; state.stats = null; state.trace = []; state.review = null;
   state.plan = null;
   state.progress = null;
@@ -182,6 +187,19 @@ function render() {
   $('negTags').innerHTML = state.negative.map((c, i) => chip(c, i, 'neg')).join('');
   $('unkTags').innerHTML = state.unknown.map((u, i) =>
     `<span class="unk" data-u="${i}" title="点击看候选">${u.tag}</span>`).join('');
+
+  // 候选补充：自省想加、但不在可新增池里的词（词表已确认）。点了就进正向
+  const cands = state.candidates || [];
+  const candGroup = $('candGroup');
+  if (candGroup) candGroup.hidden = !cands.length;
+  const candTags = $('candTags');
+  if (candTags) {
+    candTags.innerHTML = cands.map((c, i) =>
+      `<span class="cand" data-cand="${i}" title="点击加入正向${c.cn ? ' · ' + escHtml(c.cn) : ''}">${escHtml(c.tag)}${c.cn ? ' · ' + escHtml(c.cn) : ''}</span>`
+    ).join('');
+  }
+  const candCount = $('candCount');
+  if (candCount) candCount.textContent = cands.length;
 
   $('qCount').textContent = state.quality.length;
   $('posCount').textContent = state.positive.length;
@@ -211,6 +229,7 @@ function render() {
   renderOut();
   bindTags();
   bindUnknown();
+  bindCandidates();
   saveWork();          // 每次状态变化都落盘，换页回来不丢
 }
 
@@ -274,9 +293,11 @@ function renderReview() {
   const picked = (rv.picked_round && rv.final_score != null)
     ? ' · 采用第 ' + rv.picked_round + ' 轮（' + rv.final_score + ' 分）'
     : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
+  const candSum = (rv.candidates || (state.candidates || []).length)
+    ? ' · 候选补充 ' + (rv.candidates || (state.candidates || []).length) + ' 个' : '';
   $('reviewSum').textContent = rv.error
     ? '自省评审 · 未完成（点开可重试）'
-    : '自省评审 · ' + rounds.length + ' 轮' + picked;
+    : '自省评审 · ' + rounds.length + ' 轮' + picked + candSum;
   if (rv.error) {
     $('review').innerHTML =
       '<div class="step"><span class="tool">提示</span><span class="sum">' +
@@ -296,10 +317,12 @@ function renderReview() {
     const miss = (r.missing || []).length
       ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
     const dims = reviewDimLine(r.dimensions);
+    const candLine = r.candidates
+      ? ' · 候选补充 ' + r.candidates + ' 个' : '';
     return `<div class="step">
         <span class="rnd">${i + 1}</span>
         <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
-        <span class="sum">改动 ${r.changed || 0} 个${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
+        <span class="sum">改动 ${r.changed || 0} 个${candLine}${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
         ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
         ${dims ? '<div class="dims">' + dims + '</div>' : ''}
         ${probs}${miss}
@@ -317,6 +340,9 @@ function renderReview() {
 function applyResult(r) {
   state.quality = [];
   state.positive = [];
+  state.candidates = (r.positive_candidates || []).map(c => ({
+    tag: c.tag, cn: c.cn || '', category: c.category,
+    post_count: c.post_count || 0, weight: 1, policy: c.policy }));
   state.unknown = [];
   for (const h of (r.positive || [])) {
     const c = { tag: h.tag, cn: h.cn || '', category: h.category,
@@ -483,6 +509,37 @@ function showPop(anchor, idx) {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.pop') && !e.target.closest('.unk')) closePop();
 });
+
+/* ---------------------------------------------------------------- 候选补充
+ * 自省改写想加、但不在「可新增池」里的 tag：词表确认存在，只是没被提前核对过。
+ * 默认不进正向、也不发 ComfyUI；用户点一下才收下。
+ */
+
+function bindCandidates() {
+  const host = $('candTags');
+  if (!host) return;
+  host.querySelectorAll('[data-cand]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      addCandidate(+el.dataset.cand);
+    });
+  });
+}
+
+/** 把第 i 个候选加入正向（质量词进质量词组），然后重新渲染 */
+function addCandidate(idx) {
+  const c = (state.candidates || [])[idx];
+  if (!c) return '';
+  state.candidates.splice(idx, 1);
+  const item = { tag: c.tag, cn: c.cn || '', category: c.category,
+                 post_count: c.post_count || 0, weight: 1, policy: c.policy };
+  if (isQuality(item)) state.quality.push(item);
+  else state.positive.push(item);
+  tidy();
+  render();
+  toast('已加入正向：' + item.tag);
+  return item.tag;
+}
 
 /* ---------------------------------------------------------------- 一键预设 */
 
@@ -1033,6 +1090,7 @@ function loadRecord(item) {
   $('inputText').value = item.full || item.text || '';
   state.quality = (item.quality || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
   state.positive = (item.pos || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+  state.candidates = [];
   state.negative = (item.neg || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
   state.trace = [];
   state.review = null;

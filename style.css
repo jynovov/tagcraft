@@ -236,6 +236,13 @@ button.primary .ripple{
 }
 .unk:hover{background:#fbdcd9}
 
+/* 候选补充：白名单外、但词表里确实存在的新词，点一下就进正向 */
+.cand{
+  background:#eef7ee;border:1px solid #c9e2c9;color:#3f7a45;border-radius:9px;
+  padding:4px 9px;font-size:12px;font-family:Consolas,monospace;cursor:pointer
+}
+.cand:hover{background:#dff0df}
+
 /* 候选气泡 */
 .pop{
   position:fixed;z-index:50;background:#fff;border:1px solid var(--line2);border-radius:13px;
