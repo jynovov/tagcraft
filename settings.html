@@ -62,11 +62,36 @@
         <label class="inline check" style="margin-top:12px">
           <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写
         </label>
+        <label class="inline check" style="margin-top:12px">
+          <input id="plan" type="checkbox"> 规划展示（生成前先让模型列出画面要素与查词计划）
+        </label>
         <div class="page-sub" style="margin-top:8px">
-          生成页勾选「Agent 模式」后生效：模型自己决定调用词表工具（search_tags / get_tag /
+          开启后会在生成之前（Agent 模式下是查词循环之前）多调一次模型，产出一份
+          「画面要素 + 查词方向」计划，显示在结果区轨迹的最上方，可折叠。
+          计划只做展示、不会自动执行，查词仍由模型自己决定；关掉时完全不发这次请求。
+          <br>生成页勾选「Agent 模式」后生效：模型自己决定调用词表工具（search_tags / get_tag /
           validate_tags / suggest_tags）查证写法，最多跑 N 轮；随后由审核环节打分（0-100）
           并输出修正后的 tag。轮数越多越稳，但更慢也更费 token。
           <br>Krea2 页沿用这里的轮数设置，但它不做词表校验，工具只有「中英术语对照」一个。
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          偏好
+          <span class="spacer"></span>
+          <a class="page-sub" href="/preferences.html">管理偏好 →</a>
+        </div>
+        <label class="inline check" style="margin-top:0">
+          <input id="prefsOn" type="checkbox"> 生成时带上当前偏好的 tag
+        </label>
+        <div class="field" style="margin-top:12px">
+          <label>生效的那一套</label>
+          <select id="prefsActive"></select>
+        </div>
+        <div id="prefsHint" class="page-sub">
+          只对 tag 模式（NoobAI 系）生效：这套 tag 会追加到系统提示词末尾，并写进生成缓存 key；
+          Krea 2 页不追加。
         </div>
       </div>
 

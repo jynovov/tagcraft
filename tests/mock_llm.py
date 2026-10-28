@@ -32,6 +32,14 @@ def _is_critic(msgs):
     return False
 
 
+def _is_plan(msgs):
+    """规划请求：系统提示词里带「规划助手」。"""
+    for m in msgs or []:
+        if m.get("role") == "system" and "规划" in (m.get("content") or ""):
+            return True
+    return False
+
+
 def _is_natural(msgs):
     """Krea 2 模式：系统提示词里会出现「自然语言提示词」或「Krea 2」。"""
     for m in msgs or []:
@@ -91,6 +99,19 @@ class Handler(BaseHTTPRequestHandler):
         if "no-tools" in model and has_tools:
             return self._json({"error": {"message":
                 "This model does not support tools / function calling"}}, 400)
+
+        # ---- 规划展示（只调一次，产出展示用计划） ----
+        if _is_plan(msgs):
+            if "badplan" in model.lower():
+                # 模型返回了一段非 JSON 的废话：计划降级，生成不能中断
+                return reply("我先在心里过了一遍画面，但这次不打算给 JSON。")
+            if "plan-error" in model.lower():
+                # 接口直接报错：同样只降级，不影响生成
+                return self._json({"error": {"message": "plan endpoint unavailable"}}, 400)
+            return reply(json.dumps({
+                "elements": ["黄昏海边", "校服女生", "过膝袜", "回头看向镜头", "逆光"],
+                "queries": ["过膝袜", "夕阳", "looking_back"],
+            }, ensure_ascii=False))
 
         if "flaky" in model:
             left = FLAKY.get(model, 2)

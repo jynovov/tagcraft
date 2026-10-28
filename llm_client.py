@@ -98,6 +98,34 @@ KREA_SYSTEM_PROMPT = """你是英文图像提示词（prompt）工程师，服�
 
 TRANSIENT_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
+MAX_PREFS = 20   # 一次最多带 20 个偏好 tag（和前端保持一致）
+
+
+def prefs_prompt_block(prefs):
+    """把偏好 tag 拼成 system prompt 末尾的一段。
+
+    只给 tag 模式用：Krea 2 写成自然语言句子，偏好 tag 会和「别堆 tag」的规则打架，
+    所以调用方在 natural 模式下一律不要传 prefs。
+    """
+    tags = []
+    seen = set()
+    for raw in (prefs or []):
+        t = " ".join(str(raw if raw is not None else "").split())
+        if not t:
+            continue
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(t)
+        if len(tags) >= MAX_PREFS:
+            break
+    if not tags:
+        return ""
+    return ("\n【用户偏好】这位用户常用的 tag：%s。\n"
+            "画面合适时可以带上它们；和用户这次的描述冲突时一律以描述为准，"
+            "用不上就不写（可忽略）。\n" % ", ".join(tags))
+
 
 def _friendly_api_error(code, detail):
     """把接口返回的错误 JSON 压成一句人话（顺便给出中文提示）。"""
@@ -187,7 +215,7 @@ def ping_llm(cfg):
 
 
 def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
-             prompt_model=DEFAULT_MODEL, system_prompt=""):
+             prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None):
     model = (cfg.get("model") or "").strip()
     prof = get_model(prompt_model)
     natural = prof["mode"] == "natural"
@@ -200,6 +228,8 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
         system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
     if natural:
         system += "\n本次英文提示词长度：60~120 个英文单词。\n"
+    else:
+        system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
 
     body = _post_chat(cfg, {
         "model": model,

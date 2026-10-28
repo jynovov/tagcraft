@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /*
- * 界面逻辑测试：草稿箱（多份草稿的保存 / 切换 / 复制 / 改名 / 清空 / 删除 / 迁移）。
+ * 界面逻辑测试：上次状态（输入 + 结果自动保存 / 重开恢复 / 旧数据迁移 / 清空），
+ * 外加示例池、历史统计、收藏导出、自省渲染、进度条等。
  *
  * 做法：用一套极简的 DOM 桩把 common.js + app.js 装进 node 的 vm 里跑，
  * 不需要浏览器，也不需要任何第三方依赖（连 jsdom 都不用）。
@@ -16,47 +17,81 @@ const path = require('path');
 const vm = require('vm');
 
 const WS = path.join(__dirname, '..');
-const store = {};
-const els = [];
 
-function makeEl(id) {
-  return {
-    id, value: '', checked: false, hidden: false, textContent: '', innerHTML: '',
-    options: [], style: {}, dataset: {}, className: '',
-    addEventListener() {}, removeEventListener() {},
-    querySelectorAll() { return []; }, querySelector() { return null; },
-    appendChild() {}, remove() {}, focus() {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    getBoundingClientRect() { return { left: 0, top: 0, bottom: 0, width: 0, height: 0 }; },
-    closest() { return null; }
+/**
+ * 造一个页面运行环境：极简 DOM 桩 + 独立 localStorage + 指定的前端脚本。
+ * querySelectorAll 只会解析测试真正用到的 [data-xxx] 按钮（用于模拟点击），
+ * 不引入任何第三方 DOM 依赖。
+ */
+function createPage(files) {
+  const store = {};
+  const els = [];
+
+  function makeEl(id) {
+    return {
+      id, value: '', checked: false, hidden: false, textContent: '', innerHTML: '',
+      options: [], style: {}, dataset: {}, className: '', _on: {},
+      addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); },
+      removeEventListener() {},
+      click() { (this._on.click || []).slice().forEach(fn => fn({ target: this })); },
+      querySelectorAll(sel) {
+        const m = /^\[data-([a-z-]+)\]$/.exec(String(sel || '').trim());
+        if (!m) return [];
+        const attr = m[1];
+        // 同一次渲染里要拿到同一批按钮，否则测试点不到 render 时绑的监听
+        const key = attr + '|' + this.innerHTML;
+        if (this._qcache && this._qcache[key]) return this._qcache[key];
+        const out = [];
+        const re = new RegExp('<[a-z]+\\b[^>]*\\bdata-' + attr + '="([^"]*)"[^>]*>', 'gi');
+        let hit;
+        while ((hit = re.exec(this.innerHTML))) {
+          const b = makeEl('_q_' + attr + '_' + out.length);
+          b.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = hit[1];
+          b.disabled = /\bdisabled\b/.test(hit[0]);
+          out.push(b);
+        }
+        this._qcache = this._qcache || {};
+        this._qcache[key] = out;
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      appendChild() {}, remove() {}, focus() {},
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      getBoundingClientRect() { return { left: 0, top: 0, bottom: 0, width: 0, height: 0 }; },
+      closest() { return null; }
+    };
+  }
+  function el(id) { return els[id] || (els[id] = makeEl(id)); }
+
+  const ctx = {
+    console, setTimeout, clearTimeout, JSON, Date, Math, parseInt, parseFloat, isNaN,
+    localStorage: {
+      getItem: k => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+      removeItem: k => { delete store[k]; },
+      clear: () => { Object.keys(store).forEach(k => delete store[k]); },
+      keys: () => Object.keys(store)
+    },
+    document: {
+      getElementById: el, querySelectorAll: () => [], querySelector: () => null,
+      createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
+    },
+    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    location: { href: '/' },
+    fetch: () => Promise.reject(new Error('测试环境不联网'))
   };
-}
-function el(id) { return els[id] || (els[id] = makeEl(id)); }
+  ctx.window = ctx;
+  ctx.prompt = () => ctx.__promptAnswer;
+  ctx.confirm = () => ctx.__confirmAnswer !== false;
+  vm.createContext(ctx);
 
-const ctx = {
-  console, setTimeout, clearTimeout, JSON, Date, Math, parseInt, parseFloat, isNaN,
-  localStorage: {
-    getItem: k => (k in store ? store[k] : null),
-    setItem: (k, v) => { store[k] = String(v); },
-    removeItem: k => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach(k => delete store[k]); }
-  },
-  document: {
-    getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-    createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
-  },
-  navigator: { clipboard: { writeText: () => Promise.resolve() } },
-  location: { href: '/' },
-  fetch: () => Promise.reject(new Error('测试环境不联网'))
-};
-ctx.window = ctx;
-ctx.prompt = () => ctx.__promptAnswer;
-ctx.confirm = () => ctx.__confirmAnswer !== false;
-vm.createContext(ctx);
-
-for (const f of ['common.js', 'app.js']) {
-  vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
+  for (const f of files) {
+    vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
+  }
+  return { ctx, store, els, el };
 }
+
+const main = createPage(['common.js', 'app.js']);
 
 const script = `(() => {
 const R = [];
@@ -64,121 +99,153 @@ const chk = (n, c, x) => R.push([n, !!c, x === undefined ? '' : String(x)]);
 
 /* ---------- 1. 全新用户 ---------- */
 localStorage.clear();
-drafts = []; curId = null;
 initDrafts();
-chk('全新用户自动有一份空草稿', drafts.length === 1 && curId === drafts[0].id);
-renderDraftBar();
-chk('草稿栏渲染出选项', document.getElementById('draftSel').innerHTML.indexOf('<option') >= 0);
+chk('全新用户没有可恢复内容', curDraft() === null);
+chk('输入框是空的', document.getElementById('inputText').value === '');
+chk('结果也是空的', state.positive.length === 0 && state.quality.length === 0);
+chk('不会写旧版多份键', localStorage.getItem('tagcraft.works') === null &&
+    localStorage.getItem('tagcraft.work') === null);
 
-/* ---------- 2. 在草稿 A 里生成 ---------- */
+/* ---------- 2. 输入 + 结果自动存成唯一一份 ---------- */
 document.getElementById('inputText').value = '黄昏海边女生校服过膝袜';
 state.quality = [{ tag: 'masterpiece', cn: '杰作', category: 5, post_count: 0, weight: 1 }];
 state.positive = [{ tag: 'thighhighs', cn: '过膝袜', category: 1, post_count: 12000, weight: 1.3 }];
 state.negative = [{ tag: 'worst_quality', cn: '最差', category: 5, post_count: 0, weight: 1 }];
+state.unknown = [{ tag: '不认识的词', suggestions: [], kind: 'pos' }];
 state.notes = '黄昏逆光';
+state.stats = { model: 2, checked: 5, unknown: 1, ms: 1200, tool_calls: 1 };
 state.trace = [{ round: 1, tool: 'search_tags', args: {}, summary: '查过膝袜' }];
 state.review = { rounds: [{ round: 1, score: 88, changed: 2 }], final_score: 88, iterations: 1 };
+state.plan = { elements: ['黄昏海边', '校服女生'], queries: ['过膝袜'] };
 render();
-const idA = curId;
-chk('自动用描述给草稿命名', (curDraft().name || '').indexOf('黄昏海边') === 0, curDraft().name);
+const saved1 = JSON.parse(localStorage.getItem('tagcraft.cur'));
+chk('描述写进唯一一份', saved1.text === '黄昏海边女生校服过膝袜');
+chk('质量词写进唯一一份', saved1.quality.length === 1 && saved1.quality[0].tag === 'masterpiece');
+chk('正向 tag 连权重一起写',
+    saved1.positive[0].tag === 'thighhighs' && saved1.positive[0].weight === 1.3);
+chk('负向 / 未识别写进唯一一份',
+    saved1.negative[0].tag === 'worst_quality' && saved1.unknown.length === 1);
+chk('自省评分写进唯一一份', saved1.review && saved1.review.final_score === 88);
+chk('计划写进唯一一份', saved1.plan && saved1.plan.queries[0] === '过膝袜');
+chk('只存一份，不再是数组',
+    !Array.isArray(saved1) && localStorage.getItem('tagcraft.works') === null);
 
-/* ---------- 3. 新建草稿 B，A 不能受影响 ---------- */
-newDraft();
-chk('新建后清空界面', state.positive.length === 0 && document.getElementById('inputText').value === '');
-chk('草稿数变成 2', drafts.length === 2);
-const idB = curId;
-chk('A/B 是两个不同草稿', idA !== idB);
+/* ---------- 3. 重新打开页面恢复 ---------- */
+document.getElementById('inputText').value = '';
+state.quality = []; state.positive = []; state.negative = []; state.unknown = [];
+state.notes = ''; state.stats = null; state.trace = []; state.review = null; state.plan = null;
+initDrafts();
+chk('重开后描述恢复',
+    document.getElementById('inputText').value === '黄昏海边女生校服过膝袜');
+chk('重开后正向 tag 恢复',
+    state.positive.length === 1 && state.positive[0].tag === 'thighhighs');
+chk('重开后权重恢复', state.positive[0].weight === 1.3);
+chk('重开后负向 tag 恢复',
+    state.negative.length === 1 && state.negative[0].tag === 'worst_quality');
+chk('重开后未识别恢复', state.unknown.length === 1 && state.unknown[0].tag === '不认识的词');
+chk('重开后自省评分恢复', state.review && state.review.final_score === 88);
+chk('重开后计划恢复', state.plan && state.plan.elements.length === 2);
+render();
+chk('重开后结果框重新渲染',
+    document.getElementById('outPos').value.indexOf('thighhighs') >= 0,
+    document.getElementById('outPos').value);
+
+/* ---------- 4. 重新生成覆盖上次 ---------- */
 document.getElementById('inputText').value = '雨夜天台撑伞的少女';
 state.positive = [{ tag: 'rain', cn: '雨', category: 0, post_count: 0, weight: 1 }];
+state.unknown = []; state.review = null; state.plan = null;
 render();
-const A = drafts.find(d => d.id === idA);
-chk('草稿 A 的正向 tag 还在', A.positive.length === 1 && A.positive[0].tag === 'thighhighs');
-chk('草稿 A 的权重还在', A.positive[0].weight === 1.3);
-chk('草稿 A 的描述还在', A.text.indexOf('黄昏') >= 0);
-chk('草稿 B 有自己的内容', drafts.find(d => d.id === idB).positive[0].tag === 'rain');
+const saved2 = JSON.parse(localStorage.getItem('tagcraft.cur'));
+chk('重新生成覆盖描述', saved2.text === '雨夜天台撑伞的少女');
+chk('重新生成覆盖结果', saved2.positive.length === 1 && saved2.positive[0].tag === 'rain');
+chk('旧结果不再残留', saved2.positive.every(c => c.tag !== 'thighhighs'));
 
-/* ---------- 4. 切回 A ---------- */
-switchDraft(idA);
-chk('切回后描述恢复', document.getElementById('inputText').value.indexOf('黄昏') >= 0);
-chk('切回后 tag 恢复', state.positive.length === 1 && state.positive[0].tag === 'thighhighs');
-chk('切回后中文名恢复', state.positive[0].cn === '过膝袜');
-chk('切回后轨迹恢复', state.trace.length === 1 && state.trace[0].tool === 'search_tags');
-chk('切回后评分恢复', state.review && state.review.final_score === 88);
-
-/* ---------- 5. 复制 ---------- */
-copyDraft();
-chk('复制后共 3 份', drafts.length === 3);
-chk('副本名字带「副本」', (curDraft().name || '').indexOf('副本') >= 0, curDraft().name);
-chk('副本内容与来源一致', state.positive[0].tag === 'thighhighs');
-document.getElementById('inputText').value = '改过的文字';
-state.positive = [{ tag: 'changed', cn: '', category: 0, post_count: 0, weight: 1 }];
+/* ---------- 5. 清空后不残留 ---------- */
+resetView();
+saveWork();
 render();
-chk('改副本不会动到原稿', drafts.find(d => d.id === idA).text.indexOf('黄昏') >= 0);
-chk('副本确实改了', curDraft().text === '改过的文字');
+const saved3 = JSON.parse(localStorage.getItem('tagcraft.cur'));
+chk('清空后描述为空', saved3.text === '');
+chk('清空后结果为空',
+    saved3.positive.length === 0 && saved3.negative.length === 0 &&
+    saved3.quality.length === 0 && saved3.unknown.length === 0);
+chk('清空后只剩单份键',
+    localStorage.keys().filter(k => k.indexOf('tagcraft.') === 0).join(',') === 'tagcraft.cur',
+    localStorage.keys().join(','));
+initDrafts();
+chk('清空后再打开还是空的',
+    document.getElementById('inputText').value === '' && state.positive.length === 0);
 
-/* ---------- 6. 改名 ---------- */
-window.__promptAnswer = '方案 B 构图';
-renameDraft();
-chk('改名生效', curDraft().name === '方案 B 构图', curDraft().name);
-
-/* ---------- 7. 清空（保留草稿条目） ---------- */
-const before = drafts.length;
-resetView(); saveWork(); render();
-chk('清空后草稿条目还在', drafts.length === before);
-chk('清空后内容为空', curDraft().positive.length === 0 && curDraft().text === '');
-chk('清空不影响别的草稿', drafts.find(d => d.id === idA).positive.length === 1);
-
-/* ---------- 8. 删除 ---------- */
-window.__confirmAnswer = true;
-const n0 = drafts.length;
-delDraft();
-chk('删除后少一份', drafts.length === n0 - 1);
-while (drafts.length > 1) delDraft();
-delDraft();
-chk('删光后自动补一份空草稿', drafts.length === 1 && curDraft().positive.length === 0);
-
-/* ---------- 9. 旧版单草稿迁移 ---------- */
+/* ---------- 6. 旧版多份数据：只取当前那份迁移 ---------- */
 localStorage.clear();
-drafts = []; curId = null;
+localStorage.setItem('tagcraft.works', JSON.stringify([
+  { id: 'd2', text: '第二份内容', quality: [],
+    positive: [{ tag: 'second_tag', cn: '', category: 0, post_count: 0, weight: 1 }],
+    negative: [], unknown: [], notes: '' },
+  { id: 'd1', text: '第一份内容', quality: [],
+    positive: [{ tag: 'first_tag', cn: '', category: 0, post_count: 0, weight: 1 }],
+    negative: [], unknown: [], notes: '' }
+]));
+localStorage.setItem('tagcraft.cur', 'd2');
+initDrafts();
+chk('旧多份数据按「当前那份」迁移',
+    document.getElementById('inputText').value === '第二份内容' &&
+    state.positive[0].tag === 'second_tag');
+chk('迁移后旧多份键被删除', localStorage.getItem('tagcraft.works') === null);
+const migrated = JSON.parse(localStorage.getItem('tagcraft.cur'));
+chk('迁移后 cur 存的是单份 JSON',
+    migrated.text === '第二份内容' && !Array.isArray(migrated));
+
+localStorage.clear();
+localStorage.setItem('tagcraft.works', JSON.stringify([
+  { id: 'a', text: 'A 份', quality: [], positive: [], negative: [], unknown: [] },
+  { id: 'b', text: 'B 份', quality: [], positive: [], negative: [], unknown: [] }
+]));
+localStorage.setItem('tagcraft.cur', '不存在的 id');
+initDrafts();
+chk('旧键指向的份不存在时取第一份',
+    document.getElementById('inputText').value === 'A 份');
+
+/* ---------- 7. 更早的单份旧数据 ---------- */
+localStorage.clear();
 localStorage.setItem('tagcraft.work', JSON.stringify({
-  text: '迁移过来的旧草稿', quality: [],
+  text: '迁移过来的旧内容', quality: [],
   positive: [{ tag: 'old_tag', cn: '旧的', category: 0, post_count: 0, weight: 1 }],
   negative: [], unknown: [], notes: '旧笔记'
 }));
 initDrafts();
-chk('旧单草稿被迁移成草稿', drafts.length === 1 && curDraft().positive[0].tag === 'old_tag');
-chk('迁移后旧键被删除', !localStorage.getItem('tagcraft.work'));
-chk('迁移后按内容命名', (curDraft().name || '').indexOf('迁移过来') === 0, curDraft().name);
+chk('更早的单份旧数据也能迁移', state.positive[0].tag === 'old_tag');
+chk('迁移后更早的旧键被删除', localStorage.getItem('tagcraft.work') === null);
+chk('迁移后自动写成单份',
+    JSON.parse(localStorage.getItem('tagcraft.cur')).text === '迁移过来的旧内容');
 
-/* ---------- 10. 模拟切到别的页面再回来 ---------- */
+/* ---------- 8. 模拟切到别的页面再回来 ---------- */
 localStorage.clear();
-drafts = []; curId = null;
 initDrafts();
 document.getElementById('inputText').value = '切页测试';
 state.positive = [{ tag: 'keep_me', cn: '留着', category: 0, post_count: 0, weight: 1 }];
+state.review = { rounds: [], final_score: 91 };
 render();
 document.getElementById('inputText').value = '';
-state.positive = []; state.quality = []; state.negative = [];
-drafts = []; curId = null;            // 内存全丢，等价于重新打开页面
+state.positive = []; state.quality = []; state.negative = []; state.review = null;
 initDrafts();
-restoreWork();
 chk('切页回来 tag 还在', state.positive.length === 1 && state.positive[0].tag === 'keep_me');
 chk('切页回来描述还在', document.getElementById('inputText').value === '切页测试');
-chk('切页回来草稿名还在', (curDraft().name || '').indexOf('切页') === 0, curDraft().name);
-renderDraftBar();
-chk('切页回来选项数量正确',
-    (document.getElementById('draftSel').innerHTML.match(/<option/g) || []).length === drafts.length);
+chk('切页回来评分还在', state.review && state.review.final_score === 91);
+chk('切页回来不会多出别的键',
+    localStorage.keys().indexOf('tagcraft.works') < 0 &&
+    localStorage.keys().indexOf('tagcraft.krea.cur') < 0);
 
-/* ---------- 11. 历史记录只留最近 10 条 ---------- */
+/* ---------- 11. 历史记录只留最近 30 条 ---------- */
 localStorage.clear();
 const many = [];
-for (let i = 0; i < 25; i++) many.push({ text: '记录' + i, pos: ['a'], time: '' });
+for (let i = 0; i < 35; i++) many.push({ text: '记录' + i, pos: ['a'], time: '' });
 saveHistory(many);                       // 最新的一条排在最前
-chk('历史最多保留 10 条', loadHistory().length === 10, String(loadHistory().length));
+chk('历史最多保留 30 条', loadHistory().length === 30, String(loadHistory().length));
 chk('保留的是最新的那些',
-    loadHistory()[0].text === '记录0' && loadHistory()[9].text === '记录9',
-    loadHistory()[9] ? loadHistory()[9].text : '');
-chk('超出的旧记录没被保留', loadHistory().every(h => h.text !== '记录10'));
+    loadHistory()[0].text === '记录0' && loadHistory()[29].text === '记录29',
+    loadHistory()[29] ? loadHistory()[29].text : '');
+chk('超出的旧记录没被保留', loadHistory().every(h => h.text !== '记录30'));
 saveHistory([]);
 chk('清空历史可用', loadHistory().length === 0);
 
@@ -253,7 +320,102 @@ chk('两轮评分都还在历史里',
 return R;
 })();`;
 
-const rows = vm.runInContext(script, ctx, { filename: 'ui-test' });
+const mainRows = vm.runInContext(script, main.ctx, { filename: 'ui-test' });
+
+/* ---------- 历史页分页（单独 context：history.js 与 app.js 都定义了 render） ---------- */
+const his = createPage(['common.js', 'history.js']);
+const historyScript = `(() => {
+const R = [];
+const chk = (n, c, x) => R.push([n, !!c, x === undefined ? '' : String(x)]);
+
+const listEl = document.getElementById('list');
+const pagerEl = document.getElementById('hisPager');
+const cards = () => (listEl.innerHTML.match(/class="hcard"/g) || []).length;
+const pager = () => pagerEl.innerHTML;
+const rec = (i) => ({ kind: 'tag', text: 'R' + i, quality: ['q' + i], pos: ['p' + i], time: '' });
+function fill(n) {
+  const many = [];
+  for (let i = 0; i < n; i++) many.push(rec(i));
+  saveHistory(many);
+}
+
+var __copied = null;
+navigator.clipboard.writeText = v => { __copied = v; return Promise.resolve(); };
+
+/* ---------- 第 1 页 ---------- */
+localStorage.clear();
+fill(25);
+hisPage = 1;
+render();
+chk('历史第 1 页 10 条', cards() === 10, String(cards()));
+chk('历史每页 10 条，共 3 页', pager().indexOf('第 1 / 3 页') >= 0, pager());
+chk('历史第 1 页上一页禁用',
+    pagerEl.querySelectorAll('[data-page-prev]')[0].disabled === true);
+chk('历史第 1 页下一页可用',
+    pagerEl.querySelectorAll('[data-page-next]')[0].disabled === false);
+chk('历史第 1 页索引从 0 开始',
+    listEl.innerHTML.indexOf('data-del="0"') >= 0 &&
+    listEl.innerHTML.indexOf('data-del="10"') < 0);
+
+/* ---------- 翻页与索引偏移 ---------- */
+pagerEl.querySelectorAll('[data-page-next]')[0].click();
+chk('历史翻到第 2 页', hisPage === 2 && cards() === 10,
+    'page=' + hisPage + ' cards=' + cards());
+chk('历史第 2 页索引偏移正确',
+    listEl.innerHTML.indexOf('data-del="10"') >= 0 &&
+    listEl.innerHTML.indexOf('data-del="20"') < 0);
+chk('历史第 2 页页码正确', pager().indexOf('第 2 / 3 页') >= 0, pager());
+
+listEl.querySelectorAll('[data-load]')[0].click();
+chk('历史翻页后载入的是第 11 条记录',
+    JSON.parse(localStorage.getItem('tagcraft.pending')).text === 'R10');
+listEl.querySelectorAll('[data-copy]')[0].click();
+chk('历史翻页后复制的是第 11 条记录',
+    String(__copied).indexOf('p10') >= 0, String(__copied));
+
+listEl.querySelectorAll('[data-del]')[0].click();
+chk('历史翻页后删除的是第 11 条记录',
+    loadHistory().length === 24 && !loadHistory().some(h => h.text === 'R10'));
+
+/* ---------- 末页不足 10 条 ---------- */
+fill(25);
+hisPage = 3;
+render();
+chk('历史末页只有 5 条', cards() === 5 && pager().indexOf('第 3 / 3 页') >= 0,
+    'cards=' + cards());
+chk('历史末页禁用下一页',
+    pagerEl.querySelectorAll('[data-page-next]')[0].disabled === true);
+chk('历史末页索引从第 21 条开始',
+    listEl.innerHTML.indexOf('data-del="20"') >= 0 &&
+    listEl.innerHTML.indexOf('data-del="24"') >= 0);
+
+/* ---------- 末页删光后回退 ---------- */
+for (let i = 0; i < 5; i++) listEl.querySelectorAll('[data-del]')[0].click();
+chk('历史最后一页删光后回退到有效页',
+    hisPage === 2 && cards() === 10, 'page=' + hisPage + ' cards=' + cards());
+chk('历史回退后显示第 2 / 2 页', pager().indexOf('第 2 / 2 页') >= 0, pager());
+chk('历史最后一页删光后记录数正确', loadHistory().length === 20, String(loadHistory().length));
+chk('历史分页状态不写 localStorage',
+    localStorage.keys().every(k => k.indexOf('page') < 0), localStorage.keys().join(','));
+
+/* ---------- 30 条正好 3 页 / 清空 ---------- */
+fill(30);
+hisPage = 1;
+render();
+chk('历史 30 条正好 3 页', cards() === 10 && pager().indexOf('第 1 / 3 页') >= 0, pager());
+
+saveHistory([]);
+hisPage = 3;
+render();
+chk('历史清空后回到第 1 页并收起分页',
+    hisPage === 1 && pagerEl.hidden === true && cards() === 0);
+
+return R;
+})();`;
+
+const hisRows = vm.runInContext(historyScript, his.ctx, { filename: 'ui-history-test' });
+
+const rows = mainRows.concat(hisRows);
 let bad = 0;
 for (const [name, ok, extra] of rows) {
   console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + name + (extra && !ok ? '  → ' + extra : ''));

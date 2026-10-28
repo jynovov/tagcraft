@@ -1,43 +1,38 @@
 /* Krea 2 页面：中文描述 → 英文自然语言提示词
- * 和生成页（app.js）复用同一套交互习惯：草稿箱、进度条、轨迹、自省、收藏、发 ComfyUI，
- * 区别只有一处：结果是「一整段英文」，所以不做词表校验，换成词数统计 + 风格体检。 */
+ * 和生成页（app.js）复用同一套交互习惯：上次状态恢复、进度条、轨迹、自省、收藏、
+ * 发 ComfyUI，区别只有一处：结果是「一整段英文」，所以不做词表校验，换成词数
+ * 统计 + 风格体检。                                                       */
 
 const $ = (id) => document.getElementById(id);
 const LS_JOB = 'tagcraft.krea.job';       // 正在跑的任务号（sessionStorage，切页能接上）
 const PENDING = 'tagcraft.pending';       // 收藏页 / 历史页带过来的记录
-const LS_KREA_WORKS = 'tagcraft.krea.works';   // Krea 2 有自己的草稿箱（不和 tag 草稿混在一起）
-const LS_KREA_CUR = 'tagcraft.krea.cur';
+const LS_KREA_CUR = 'tagcraft.krea.cur';      // 唯一那份上次状态
+const LS_KREA_WORKS = 'tagcraft.krea.works';  // 旧版多份方案（只取当前那份迁移）
 
 const state = {
   prompt: '',
   notes: '',
   trace: [],
   review: null,
+  plan: null,     // 画面规划（设置页开启「规划展示」时才有）
   stats: null,
   progress: null,
   warnings: [],
   lastText: ''
 };
 
-let drafts = [];
-let curId = null;
+let saved = null;   // 上次状态的内存镜像（render 时同步）
 let pollTimer = null;
 let tickTimer = null;
-
-const curDraft = () => drafts.find(d => d.id === curId) || null;
 
 function escHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-function autoName(text) {
-  const t = String(text || '').replace(/\s+/g, ' ').trim();
-  return t ? t.slice(0, 14) : '新草稿';
-}
+/* ---------------------------------------------------------------- 上次状态 */
 
-/* ---------------------------------------------------------------- 草稿箱 */
-
-function draftPayload() {
+/** 界面上的东西整理成可存的一份状态 */
+function statePayload() {
   return {
     text: $('inputText').value,
     agent: $('useAgent').checked,
@@ -45,148 +40,103 @@ function draftPayload() {
     notes: state.notes,
     trace: state.trace,
     review: state.review,
-    stats: state.stats
+    plan: state.plan,
+    stats: state.stats,
+    warnings: state.warnings
   };
 }
 
-function emptyDraft(name) {
-  return {
-    id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    name: name || '新草稿', time: Date.now(),
-    text: '', agent: true,
-    prompt: '', notes: '', trace: [], review: null, stats: null
-  };
-}
-
+/** 写回唯一那份（render 时自动调用；清空 / 重新生成都会覆盖） */
 function saveWork() {
-  const d = curDraft();
-  if (!d) return;
-  Object.assign(d, draftPayload(), { time: Date.now() });
-  if (!d.name || d.name === '新草稿' || /^草稿 \d+$/.test(d.name)) {
-    if (String(d.text || '').trim()) d.name = autoName(d.text);
-  }
-  saveWorks(drafts);
-  renderDraftBar();
+  saved = Object.assign(statePayload(), { time: Date.now() });
+  try { localStorage.setItem(LS_KREA_CUR, JSON.stringify(saved)); } catch (e) { /* ignore */ }
 }
 
-function restoreWork() {
-  const d = curDraft();
-  if (!d) return false;
+/** 只认白名单字段，坏数据丢掉；旧数据缺字段也能读 */
+function normalizeSaved(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const arr = v => (Array.isArray(v) ? v : []);
+  const stats = (x.stats && typeof x.stats === 'object') ? x.stats : null;
+  return {
+    text: typeof x.text === 'string' ? x.text : '',
+    agent: x.agent !== false,
+    prompt: typeof x.prompt === 'string' ? x.prompt : '',
+    notes: typeof x.notes === 'string' ? x.notes : '',
+    trace: arr(x.trace),
+    review: (x.review && typeof x.review === 'object') ? x.review : null,
+    plan: (x.plan && typeof x.plan === 'object') ? x.plan : null,
+    stats: stats,
+    warnings: Array.isArray(x.warnings) ? x.warnings
+      : (stats && Array.isArray(stats.warnings) ? stats.warnings : [])
+  };
+}
+
+/** 读唯一那份；没有（或存的还是旧版 id）就迁移旧数据 */
+function loadSaved() {
+  let obj = null;
+  try { obj = normalizeSaved(JSON.parse(localStorage.getItem(LS_KREA_CUR) || 'null')); } catch (e) { obj = null; }
+  if (obj) {
+    try { localStorage.removeItem(LS_KREA_WORKS); } catch (e) { /* ignore */ }
+    return obj;
+  }
+  return migrateOld();
+}
+
+/** 旧数据迁移：多份里取「当前那一份」，迁移完删旧键 */
+function migrateOld() {
+  let one = null;
+  try {
+    const raw = localStorage.getItem(LS_KREA_WORKS);
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length) {
+        const oldId = localStorage.getItem(LS_KREA_CUR);
+        one = list.find(d => d && d.id === oldId) || list.find(d => d) || null;
+      }
+      localStorage.removeItem(LS_KREA_WORKS);
+    }
+  } catch (e) {
+    try { localStorage.removeItem(LS_KREA_WORKS); } catch (e2) { /* ignore */ }
+  }
+  const s = normalizeSaved(one);
+  if (s) {
+    try { localStorage.setItem(LS_KREA_CUR, JSON.stringify(s)); } catch (e) { /* ignore */ }
+  }
+  return s;
+}
+
+/** 把一份状态读回界面 */
+function applySaved(s) {
+  const d = s || {};
   $('inputText').value = d.text || '';
   $('useAgent').checked = d.agent !== false;
   state.prompt = d.prompt || '';
   state.notes = d.notes || '';
   state.trace = d.trace || [];
   state.review = d.review || null;
+  state.plan = d.plan || null;
   state.stats = d.stats || null;
-  state.warnings = (d.stats && d.stats.warnings) || [];
-  return true;
+  state.warnings = d.warnings || [];
 }
 
-function loadKreaWorks() {
-  try {
-    const list = JSON.parse(localStorage.getItem(LS_KREA_WORKS) || '[]');
-    return Array.isArray(list) ? list.filter(d => d && d.id) : [];
-  } catch (e) { return []; }
-}
-function saveWorks(list) {
-  try { localStorage.setItem(LS_KREA_WORKS, JSON.stringify(list.slice(0, 60))); } catch (e) { /* ignore */ }
-}
-
+/** 首屏准备：读上次状态并恢复；返回是否真的有内容恢复 */
 function initDrafts() {
-  drafts = loadKreaWorks();
-  if (!drafts.length) drafts = [emptyDraft('草稿 1')];
-  curId = localStorage.getItem(LS_KREA_CUR);
-  if (!drafts.some(d => d.id === curId)) curId = drafts[0].id;
-  localStorage.setItem(LS_KREA_CUR, curId);
-  saveWorks(drafts);
+  saved = loadSaved();
+  applySaved(saved);
+  if (!saved) return false;
+  return !!(String(saved.text || '').trim() || saved.prompt || saved.plan || saved.review ||
+            (saved.trace || []).length);
 }
 
-function renderDraftBar() {
-  const sel = $('draftSel');
-  sel.innerHTML = drafts.map(d => {
-    const n = d.stats && d.stats.words ? d.stats.words + ' 词' : '';
-    return `<option value="${d.id}"${d.id === curId ? ' selected' : ''}>` +
-      escHtml(d.name || '未命名') + (n ? ' · ' + n : '') + '</option>';
-  }).join('');
-  const d = curDraft();
-  $('draftHint').textContent = d && d.time ? '最后修改 ' + new Date(d.time).toLocaleString() : '';
-}
+/** 兼容旧调用：返回当前这份状态 */
+function curDraft() { return saved; }
 
 function resetView() {
   $('inputText').value = '';
   state.prompt = ''; state.notes = '';
   state.trace = []; state.review = null; state.stats = null;
   state.progress = null; state.warnings = [];
-}
-
-function switchDraft(id) {
-  if (!id || id === curId) return;
-  saveWork();
-  curId = id;
-  localStorage.setItem(LS_KREA_CUR, curId);
-  restoreWork();
-  render();
-  renderDraftBar();
-  toast('已切到「' + (curDraft().name || '未命名') + '」');
-}
-
-function newDraft() {
-  saveWork();
-  const d = emptyDraft('草稿 ' + (drafts.length + 1));
-  drafts.unshift(d);
-  saveWorks(drafts);
-  curId = d.id;
-  localStorage.setItem(LS_KREA_CUR, curId);
-  resetView();
-  render();
-  renderDraftBar();
-  $('inputText').focus();
-  toast('新建了「' + d.name + '」');
-}
-
-function copyDraft() {
-  saveWork();
-  const src = curDraft();
-  if (!src) return;
-  const d = JSON.parse(JSON.stringify(src));
-  d.id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  d.name = (src.name || '未命名') + ' 副本';
-  d.time = Date.now();
-  drafts.unshift(d);
-  saveWorks(drafts);
-  curId = d.id;
-  localStorage.setItem(LS_KREA_CUR, curId);
-  render();
-  renderDraftBar();
-  toast('已复制为「' + d.name + '」');
-}
-
-function renameDraft() {
-  const d = curDraft();
-  if (!d) return;
-  const name = prompt('这份草稿叫什么？', d.name || '');
-  if (name === null) return;
-  d.name = String(name).trim() || d.name;
-  saveWorks(drafts);
-  renderDraftBar();
-  toast('已改名为「' + d.name + '」');
-}
-
-function delDraft() {
-  const d = curDraft();
-  if (!d) return;
-  if (!confirm('删除草稿「' + (d.name || '未命名') + '」？此操作不可恢复。')) return;
-  drafts = drafts.filter(x => x.id !== d.id);
-  if (!drafts.length) drafts = [emptyDraft('草稿 1')];
-  saveWorks(drafts);
-  curId = drafts[0].id;
-  localStorage.setItem(LS_KREA_CUR, curId);
-  resetView();
-  restoreWork();
-  render();
-  renderDraftBar();
-  toast('已删除');
+  state.plan = null;
 }
 
 /* ---------------------------------------------------------------- 渲染 */
@@ -226,10 +176,37 @@ function render() {
   if (state.notes) { n.textContent = state.notes; n.classList.add('show'); }
   else n.classList.remove('show');
 
+  renderPlan();
   renderTrace();
   renderReview();
   renderProgress();
   saveWork();
+}
+
+/* 画面规划：轨迹区最上方单独一块，可折叠（默认展开）；只做展示 */
+function renderPlan() {
+  const p = state.plan;
+  const box = $('planBox');
+  if (!box) return;
+  const els = (p && Array.isArray(p.elements)) ? p.elements : [];
+  const qs = (p && Array.isArray(p.queries)) ? p.queries : [];
+  if (!els.length && !qs.length) {
+    box.hidden = true;
+    $('plan').innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  $('planSum').textContent = '画面规划 · ' + els.length + ' 个要素 · ' + qs.length + ' 个查词方向';
+  $('plan').innerHTML =
+    (els.length
+      ? '<div class="step"><span class="tool">要素</span>' +
+        '<span class="sum">' + els.map(escHtml).join('、') + '</span></div>'
+      : '') +
+    (qs.length
+      ? '<div class="step"><span class="tool">查词</span>' +
+        '<span class="sum">' + qs.map(escHtml).join('、') + '</span></div>'
+      : '') +
+    '<div class="step"><span class="sum">计划只做展示，模型仍会自主决定查什么</span></div>';
 }
 
 function renderTrace() {
@@ -242,7 +219,7 @@ function renderTrace() {
   }
   box.hidden = false;
   $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
-  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' ? 'warn' : ''}">
+  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
       <span class="rnd">${s.round}</span>
       <span class="tool">${s.tool}</span>
       <span class="sum">${escHtml(s.summary || '')}</span>
@@ -294,6 +271,7 @@ function renderReview() {
 function finishGenerate(r, ms) {
   state.trace = r.trace || [];
   state.review = r.review || null;
+  state.plan = r.plan || null;
   state.prompt = r.prompt || '';
   state.notes = r.notes || '';
   const box = r.stats || {};
@@ -321,6 +299,7 @@ async function generate() {
     reflect,
     reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
     system_prompt: localStorage.getItem(LS_PROMPT_KREA) || '',
+    plan: planOn(),   // 规划展示：关着时后端连那次模型都不调
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;
@@ -339,6 +318,7 @@ async function generate() {
                          startedAt: Date.now(), status: 'running', done: false };
       state.trace = [];
       state.review = null;
+      state.plan = null;
       render();
       startTick();
       pollJob(r.job_id, btn);
@@ -361,6 +341,7 @@ async function generate() {
     if (r.error && !r.prompt) {
       toast(r.error, true);
       state.notes = r.raw ? '模型原文：' + String(r.raw).slice(0, 300) : '';
+      state.plan = r.plan || null;
       render();
       return;
     }
@@ -390,6 +371,19 @@ async function pollJob(jid, btn) {
       return;
     }
     stopTick();
+    if (j.status === 'interrupted') {
+      // 服务重启过：任务没法接着跑，但描述和参数都还在，可以一键重试。
+      // 保留任务号，刷新页面后重试按钮还在。
+      if (btn) { btn.disabled = false; btn.textContent = '生成提示词'; }
+      state.progress = { pct: j.pct || 0,
+                         msg: j.msg || '上次运行被中断，可重试',
+                         status: 'interrupted', startedAt: prev.startedAt || Date.now(),
+                         shown: prev.shown, done: true, jobId: jid };
+      state.notes = j.msg || '上次运行被中断，可重试';
+      render();
+      toast('上次运行被中断，可重试', true);
+      return;
+    }
     sessionStorage.removeItem(LS_JOB);
     if (btn) { btn.disabled = false; btn.textContent = '生成提示词'; }
     if (j.status === 'error') {
@@ -415,6 +409,32 @@ async function pollJob(jid, btn) {
     stopTick();
     if (btn) { btn.disabled = false; btn.textContent = '生成提示词'; }
     toast(e.message, true);
+  }
+}
+
+/** 任务被服务重启打断：用后端落盘的描述/参数重开一个任务，接着轮询新任务 */
+async function retryJob(jid, btn) {
+  if (!jid) { toast('缺少任务号，无法重试', true); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '重试中…'; }
+  const gen = $('btnGenerate');
+  if (gen) { gen.disabled = true; gen.textContent = '智能体运行中…'; }
+  try {
+    const r = await api('/api/agent/retry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: jid })
+    });
+    if (!r.job_id) throw new Error('服务没有返回任务号');
+    sessionStorage.setItem(LS_JOB, r.job_id);
+    state.progress = { pct: 2, msg: '已重新提交，等待模型响应',
+                       startedAt: Date.now(), status: 'running', done: false };
+    state.notes = '';
+    render();
+    startTick();
+    pollJob(r.job_id, gen);
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = '重试'; }
+    if (gen) { gen.disabled = false; gen.textContent = '生成提示词'; }
   }
 }
 
@@ -446,6 +466,16 @@ async function resumeJob() {
     startTick();
     pollJob(jid, btn);
     toast('上一轮 Krea2 任务还在跑，已接上进度');
+    return true;
+  }
+  if (j.status === 'interrupted') {
+    // 上次运行在服务重启时被打断：显示进度停在哪 + 重试按钮（保留任务号）
+    state.progress = { pct: j.pct || 0, msg: j.msg || '上次运行被中断，可重试',
+                       status: 'interrupted', startedAt: Date.now(),
+                       done: true, jobId: jid };
+    state.notes = j.msg || '上次运行被中断，可重试';
+    render();
+    toast('上次运行被中断，可重试', true);
     return true;
   }
   sessionStorage.removeItem(LS_JOB);
@@ -493,19 +523,25 @@ function renderProgress() {
   }
   box.classList.add('show');
   const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
-  const target = p.done ? 100 : Math.max(0, Math.min(97, p.pct || 0));
+  const interrupted = p.status === 'interrupted';
+  const finished = p.done && !interrupted;
+  const target = finished ? 100 : Math.max(0, Math.min(97, p.pct || 0));
   if (typeof p.shown !== 'number') p.shown = target;
-  const cap = p.done ? 100 : Math.min(96.5, target + 6);
+  const cap = finished ? 100 : Math.min(96.5, target + 6);
   if (p.shown < target) {
     p.shown = Math.min(target, p.shown + Math.max(0.5, (target - p.shown) * 0.3));
   } else if (p.shown < cap) {
     p.shown = Math.min(cap, p.shown + 0.25);
   }
-  if (p.done) p.shown = 100;
+  if (finished) p.shown = 100;
   const pct = Math.round(p.shown);
+  // 中断的任务保留停住时的进度，不假装跑完了
+  const width = interrupted ? Math.round(p.pct || 0) : (finished ? 100 : pct);
 
   let head;
-  if (!p.done) {
+  if (interrupted) {
+    head = '上次运行被中断';
+  } else if (!p.done) {
     head = '<span class="spin"></span>智能体运行中… ' + pct + '% · 已用 ' + secs + ' 秒';
   } else if (p.status === 'error') {
     head = '运行失败 · 用时 ' + secs + ' 秒';
@@ -514,9 +550,17 @@ function renderProgress() {
   }
   box.innerHTML =
     '<div class="progress-head">' + head + '</div>' +
-    '<div class="pbar' + (p.done ? ' done' : '') + '">' +
-    '<div class="pbar-fill" style="width:' + (p.done ? 100 : pct) + '%"></div></div>' +
-    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>';
+    '<div class="pbar' + (finished ? ' done' : '') + '">' +
+    '<div class="pbar-fill" style="width:' + width + '%"></div></div>' +
+    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>' +
+    (interrupted
+      ? '<div class="retry-row"><button class="small" id="btnRetryJob">重试</button>' +
+        '<span>用上次的描述和参数重新跑一遍</span></div>'
+      : '');
+  if (interrupted) {
+    const b = box.querySelector('#btnRetryJob');
+    if (b) b.addEventListener('click', () => retryJob(p.jobId, b));
+  }
 }
 
 function pushHistory(text) {
@@ -657,6 +701,7 @@ function loadRecord(item) {
   state.notes = '';
   state.trace = [];
   state.review = null;
+  state.plan = null;
   state.stats = null;
   state.progress = null;
   state.warnings = [];
@@ -686,13 +731,8 @@ function init() {
     resetView();
     saveWork();
     render();
-    toast('已清空（草稿还留着）');
+    toast('已清空');
   });
-  $('draftSel').addEventListener('change', e => switchDraft(e.target.value));
-  $('btnNewDraft').addEventListener('click', newDraft);
-  $('btnCopyDraft').addEventListener('click', copyDraft);
-  $('btnRenameDraft').addEventListener('click', renameDraft);
-  $('btnDelDraft').addEventListener('click', delDraft);
 
   $('inputText').addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generate(); }
@@ -724,9 +764,10 @@ function init() {
     if (e.target && e.target.closest && e.target.closest('.mswitch-item')) saveWork();
   });
 
-  initDrafts();
+  // 恢复上次状态（旧版数据会自动迁移）
+  const restored = initDrafts();
 
-  // 从收藏页 / 历史页带过来的 Krea2 记录
+  // 从收藏页 / 历史页带过来的 Krea2 记录（载入后覆盖上次状态）
   try {
     const p = localStorage.getItem(PENDING);
     if (p) {
@@ -734,18 +775,13 @@ function init() {
       if (isKreaRecord(item)) {
         localStorage.removeItem(PENDING);
         loadRecord(item);
-        renderDraftBar();
         return;
       }
     }
   } catch (e) { /* ignore */ }
 
-  const restored = restoreWork();
   render();
-  renderDraftBar();
-  if (restored && (state.prompt || $('inputText').value)) {
-    toast('已恢复「' + (curDraft().name || '未命名') + '」');
-  }
+  if (restored) toast('已恢复上次的内容');
 
   resumeJob();
 }

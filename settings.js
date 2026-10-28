@@ -6,6 +6,37 @@ let defaultPrompt = '';
 let defaultKreaPrompt = '';
 let saveTimer = null;
 
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/* ---- 偏好：开关 + 哪套生效（数据在 tagcraft.prefs.*，不进 settings 那张表） ---- */
+function updatePrefsHint() {
+  const set = activePrefs();
+  const hint = $('prefsHint');
+  if (!hint) return;
+  if (!prefsOn()) {
+    hint.textContent = '总开关已关闭：偏好不会随请求发给模型。';
+  } else if (!set) {
+    hint.textContent = '还没有生效的偏好：去「偏好」页新建一套并点「使用」。';
+  } else {
+    hint.textContent = '已生效：「' + set.name + '」· ' + set.tags.length +
+      ' 个 tag，只在 tag 模式追加到系统提示词末尾（Krea 2 不追加）。';
+  }
+}
+
+function fillPrefs() {
+  $('prefsOn').checked = prefsOn();
+  const list = loadPrefs();
+  const activeId = loadPrefsActive();
+  $('prefsActive').innerHTML = list.length
+    ? list.map(p => '<option value="' + escHtml(p.id) + '"' +
+        (p.id === activeId ? ' selected' : '') + '>' + escHtml(p.name) +
+        '（' + p.tags.length + ' 个 tag）</option>').join('')
+    : '<option value="">（还没有偏好，去「偏好」页新建）</option>';
+  updatePrefsHint();
+}
+
 /** 只存「和内置模板不一样」的提示词；一样就删掉键，升级后能自动吃新默认 */
 function savePrompt(key, value, def) {
   const v = String(value || '');
@@ -66,6 +97,7 @@ function fill() {
   $('agentRounds').value = s.agentRounds || 6;
   $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
   $('reflect').checked = s.reflect !== false;
+  $('plan').checked = planOn();
 }
 
 function collect() {
@@ -83,7 +115,28 @@ function collect() {
 function init() {
   renderSidebar('set');
   fill();
+  fillPrefs();
   loadStatus().catch(e => toast(e.message, true));
+
+  // 偏好开关与选择：改动即存（和偏好页共用同一套 localStorage）
+  $('prefsOn').addEventListener('change', () => {
+    const on = $('prefsOn').checked;
+    savePrefsOn(on);
+    updatePrefsHint();
+    toast(on ? '偏好已开启' : '偏好已关闭');
+  });
+  $('prefsActive').addEventListener('change', () => {
+    savePrefsActive($('prefsActive').value);
+    updatePrefsHint();
+    toast('已切换生效偏好');
+  });
+
+  // 规划展示：单独一个键（tagcraft.plan），改动即存；默认关
+  $('plan').addEventListener('change', () => {
+    const on = $('plan').checked;
+    savePlanOn(on);
+    toast(on ? '规划展示已开启' : '规划展示已关闭');
+  });
 
   // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）
   ['apiBase', 'model', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',

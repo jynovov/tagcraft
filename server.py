@@ -18,6 +18,7 @@ import webbrowser
 
 import lc_tools
 import gen_cache
+import job_store
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -25,9 +26,9 @@ from common import DATA_DIR, ROOT, load_config, log
 
 from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_count, dict_meta, download_dict, import_csv, search_tags, suggest_for, validate_tags
 
-from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
+from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, natural_fields, prompt_style_warnings, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _clean_prompt, agent_generate, natural_fields, plan_generate, prompt_style_warnings, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -43,46 +44,113 @@ MIME = {
     ".ico": "image/x-icon",
     ".json": "application/json; charset=utf-8",
 }
-JOBS = {}                 # job_id -> {status, steps, result, error, started, updated}
-JOBS_LOCK = threading.Lock()
-JOB_KEEP = 20             # 只保留最近这么多个任务，避免越攒越多
-def job_new():
-    jid = os.urandom(6).hex()
-    with JOBS_LOCK:
-        JOBS[jid] = {"status": "running", "steps": [], "result": None,
-                     "error": None, "pct": 0, "msg": "任务已创建",
-                     "started": time.time(), "updated": time.time()}
-        if len(JOBS) > JOB_KEEP:
-            for k in sorted(JOBS, key=lambda x: JOBS[x]["started"])[:-JOB_KEEP]:
-                JOBS.pop(k, None)
-    return jid
+# 后台任务状态现在落在 data/jobs.json（见 job_store.py），进程重启后还能知道
+# 上次哪个任务被中断了。这里保留原来的 job_* 函数名，调用方不用改。
+JOB_KEEP = job_store.JOB_KEEP   # 只保留最近这么多个任务，避免越攒越多
+
+
+def job_new(text="", prompt_model="", kwargs=None):
+    return job_store.new(text=text, prompt_model=prompt_model, kwargs=kwargs)
+
+
 def job_step(jid, msg, pct=None):
     """给任务追加一行进度，并更新百分比（进度条用）。"""
-    with JOBS_LOCK:
-        j = JOBS.get(jid)
-        if j is not None:
-            j["steps"].append(msg)
-            j["msg"] = msg
-            if pct is not None:
-                try:
-                    j["pct"] = max(j.get("pct") or 0.0, min(97.0, float(pct)))
-                except Exception:  # noqa: BLE001
-                    pass
-            j["updated"] = time.time()
+    job_store.step(jid, msg, pct)
+
+
 def job_finish(jid, result=None, error=None):
-    with JOBS_LOCK:
-        j = JOBS.get(jid)
-        if j is not None:
-            j["result"] = result
-            j["error"] = error
-            j["status"] = "error" if error else "done"
-            j["pct"] = 100
-            j["msg"] = ("失败：" + error) if error else "完成"
-            j["updated"] = time.time()
+    job_store.finish(jid, result=result, error=error)
+
+
 def job_get(jid):
-    with JOBS_LOCK:
-        j = JOBS.get(jid)
-        return json.loads(json.dumps(j)) if j else None   # 拷贝一份，避免并发读到半截
+    j = job_store.get(jid)
+    if not j:
+        return None
+    # 接口保持原来的形状：steps 是给人看的一行行文字（前端/测试都按这个用），
+    # 磁盘上存的是带 pct/ts 的对象，这里把明细另放 step_details。
+    details = j.get("steps") or []
+    j["step_details"] = details
+    j["steps"] = [d.get("msg") if isinstance(d, dict) else str(d) for d in details]
+    return j
+
+
+def _report_stats(res):
+    """统一打一行任务统计到日志。"""
+    st = res.get("stats") or {}
+    rv = res.get("review") or {}
+    if res.get("mode") == "natural":
+        log("Krea2：%d 次模型调用 · %d 次工具调用 · %d 词 · 自省 %s 轮%s" % (
+            st.get("llm_calls", 0), st.get("tool_calls", 0), st.get("words", 0),
+            rv.get("iterations", 0),
+            ("（%s 分）" % rv.get("final_score"))
+            if rv.get("final_score") is not None else ""))
+        return
+    log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
+        st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
+        ("（%s 分）" % rv.get("final_score"))
+        if rv.get("final_score") is not None else ""))
+
+
+def _start_async_job(text, prompt_model, kwargs, cfg):
+    """起一个后台任务：新任务落盘，每一步进度也落盘，返回任务号。"""
+    jid = job_new(text=text, prompt_model=prompt_model, kwargs=kwargs)
+    job_step(jid, "任务已创建，正在准备提示词")
+
+    natural = get_model(prompt_model)["mode"] == "natural"
+    akind = "krea" if natural else "agent"
+    ckey = ""
+    if gen_cache.enabled(cfg):
+        opts = {k: v for k, v in kwargs.items() if k != "prompt_model"}
+        ckey = gen_cache.make_key(akind, text, cfg, prompt_model, **opts)
+
+    def _work():
+        try:
+            if ckey:
+                hit = gen_cache.get(ckey)
+                if hit:
+                    hit["cached"] = True
+                    job_step(jid, "命中缓存，直接返回")
+                    job_finish(jid, result=hit)
+                    log("智能体命中缓存：%s…" % text[:16])
+                    return
+            res = agent_generate(cfg, text,
+                                 progress=lambda m, p=None: job_step(jid, m, p),
+                                 **kwargs)
+            if ckey and not res.get("error"):
+                gen_cache.put(ckey, akind, res)
+            job_finish(jid, result=res)
+            _report_stats(res)
+        except Exception as e:  # noqa: BLE001
+            job_finish(jid, error=str(e))
+            log("智能体任务失败：%s" % e)
+
+    threading.Thread(target=_work, daemon=True).start()
+    return jid
+
+
+
+def _clean_prefs(raw):
+    """请求里带的偏好 tag：只留字符串、去空去重、最多 MAX_PREFS 个。
+
+    前端已经截过一次了，这里再兜一层，防止手改请求把 system prompt 撑爆。
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out, seen = [], set()
+    for x in raw:
+        t = " ".join(str(x if x is not None else "").split())
+        if not t:
+            continue
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(t)
+        if len(out) >= MAX_PREFS:
+            break
+    return out
+
+
 class Server(ThreadingHTTPServer):
     # Windows 上默认的 allow_reuse_address=1 会让第二个实例也能绑定同一端口，
     # 导致「已经在运行」检测失效。关掉它，端口被占就直接报错，方便给出友好提示。
@@ -282,16 +350,30 @@ class Handler(BaseHTTPRequestHandler):
             max_tags = int(body.get("max_tags") or 45)
             temperature = float(body.get("temperature") or 0.6)
             sys_prompt = (body.get("system_prompt") or "")
+            # 偏好只给 tag 模式：Krea 2 写自然语言，塞 tag 会和「别堆 tag」的规则打架
+            natural = get_model(pm)["mode"] == "natural"
+            prefs = [] if natural else _clean_prefs(body.get("prefs"))
+            plan_flag = bool(body.get("plan", False))
             ckey = ""
             if gen_cache.enabled(cfg):
                 ckey = gen_cache.make_key("single", text, cfg, pm, max_tags=max_tags,
                                           temperature=temperature, extra_rules=extra_rules,
-                                          system_prompt=sys_prompt)
+                                          system_prompt=sys_prompt, prefs=prefs,
+                                          plan=plan_flag)
                 hit = gen_cache.get(ckey)
                 if hit:
                     hit["cached"] = True
                     log("命中缓存：%s…" % text[:16])
                     return self._send(200, hit)
+            # 规划展示：单次生成也支持（放在真正生成之前）；失败只记轨迹、不中断
+            plan_info, plan_trace = None, []
+            if plan_flag:
+                plan_info, plan_err = plan_generate(
+                    cfg, text, natural=natural, temperature=temperature,
+                    model=(cfg.get("model") or "").strip())
+                if not plan_info:
+                    plan_trace.append({"round": 0, "tool": "计划", "args": {},
+                                       "summary": "计划没生成出来（%s），继续生成" % plan_err})
             try:
                 content, parsed, usage = call_llm(
                     cfg, text,
@@ -300,6 +382,7 @@ class Handler(BaseHTTPRequestHandler):
                     temperature=temperature,
                     prompt_model=pm,
                     system_prompt=sys_prompt,
+                    prefs=prefs,
                 )
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
@@ -343,6 +426,15 @@ class Handler(BaseHTTPRequestHandler):
                     "usage": usage,
                 }
 
+            if plan_info:
+                res["plan"] = plan_info
+            if plan_trace:
+                res["trace"] = plan_trace
+            if plan_flag:
+                if isinstance(res.get("stats"), dict):
+                    res["stats"]["llm_calls"] = res["stats"].get("llm_calls", 1) + 1
+                else:
+                    res["stats"] = {"llm_calls": 2, "tool_calls": 0}
             if ckey and not res.get("error"):
                 gen_cache.put(ckey, "single", res)
             return self._send(200, res)
@@ -430,6 +522,8 @@ class Handler(BaseHTTPRequestHandler):
             pm = body.get("prompt_model") or DEFAULT_MODEL
             if not is_known_model(pm):
                 return self._send(400, {"error": "不认识的模型：%s" % pm})
+            natural = get_model(pm)["mode"] == "natural"
+            prefs = [] if natural else _clean_prefs(body.get("prefs"))
             kwargs = dict(
                 extra_rules=(body.get("extra_rules") or ""),
                 max_tags=int(body.get("max_tags") or 45),
@@ -440,56 +534,19 @@ class Handler(BaseHTTPRequestHandler):
                 use_tools=bool(body.get("use_tools", True)),
                 prompt_model=pm,
                 system_prompt=(body.get("system_prompt") or ""),
+                prefs=prefs,
+                plan=bool(body.get("plan", False)),
             )
-            akind = "krea" if get_model(pm)["mode"] == "natural" else "agent"
+            akind = "krea" if natural else "agent"
             ckey = ""
             if gen_cache.enabled(cfg):
                 opts = {k: v for k, v in kwargs.items() if k != "prompt_model"}
                 ckey = gen_cache.make_key(akind, text, cfg, pm, **opts)
 
-            def report(res):
-                st = res.get("stats") or {}
-                rv = res.get("review") or {}
-                if res.get("mode") == "natural":
-                    log("Krea2：%d 次模型调用 · %d 次工具调用 · %d 词 · 自省 %s 轮%s" % (
-                        st.get("llm_calls", 0), st.get("tool_calls", 0), st.get("words", 0),
-                        rv.get("iterations", 0),
-                        ("（%s 分）" % rv.get("final_score"))
-                        if rv.get("final_score") is not None else ""))
-                    return
-                log("智能体：%d 次模型调用 · %d 次工具调用 · 自省 %s 轮%s" % (
-                    st.get("llm_calls", 0), st.get("tool_calls", 0), rv.get("iterations", 0),
-                    ("（%s 分）" % rv.get("final_score"))
-                    if rv.get("final_score") is not None else ""))
-
             # async=true：立刻返回任务号，进度和结果都从 /api/agent/progress 拿。
             # 这样界面能看到每一步在干什么，也不会因为一次请求太久而超时。
             if body.get("async"):
-                jid = job_new()
-                job_step(jid, "任务已创建，正在准备提示词")
-
-                def _work():
-                    try:
-                        if ckey:
-                            hit = gen_cache.get(ckey)
-                            if hit:
-                                hit["cached"] = True
-                                job_step(jid, "命中缓存，直接返回")
-                                job_finish(jid, result=hit)
-                                log("智能体命中缓存：%s…" % text[:16])
-                                return
-                        res = agent_generate(cfg, text,
-                                             progress=lambda m, p=None: job_step(jid, m, p),
-                                             **kwargs)
-                        if ckey and not res.get("error"):
-                            gen_cache.put(ckey, akind, res)
-                        job_finish(jid, result=res)
-                        report(res)
-                    except Exception as e:  # noqa: BLE001
-                        job_finish(jid, error=str(e))
-                        log("智能体任务失败：%s" % e)
-
-                threading.Thread(target=_work, daemon=True).start()
+                jid = _start_async_job(text, pm, kwargs, cfg)
                 return self._send(200, {"job_id": jid})
 
             if ckey:
@@ -504,8 +561,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
             if ckey and not res.get("error"):
                 gen_cache.put(ckey, akind, res)
-            report(res)
+            _report_stats(res)
             return self._send(200, res)
+
+        if path == "/api/agent/retry":
+            # 用落盘的 text / kwargs 重开一个任务（新 id），原任务保留。
+            # API Key 从不落盘，重试时用当前配置里的 Key。
+            old_id = (body.get("id") or "").strip()
+            old = job_get(old_id)
+            if not old:
+                return self._send(404, {"error": "任务不存在或已过期"})
+            if old.get("status") == "running":
+                return self._send(409, {"error": "任务还在运行，不用重试"})
+            text = (old.get("text") or "").strip()
+            if not text:
+                return self._send(400, {"error": "这个任务没有保存描述，不能重试"})
+            pm = (old.get("prompt_model") or "").strip() or DEFAULT_MODEL
+            if not is_known_model(pm):
+                return self._send(400, {"error": "不认识的模型：%s" % pm})
+            cfg = load_config()
+            if not (cfg.get("api_key") or "").strip():
+                return self._send(400, {"error": "还没有填 API Key，无法重试"})
+            kwargs = job_store.clean_kwargs(old.get("kwargs") or {})
+            jid = _start_async_job(text, pm, kwargs, cfg)
+            log("重试被中断的任务 %s → 新任务 %s" % (old_id, jid))
+            return self._send(200, {"job_id": jid})
 
         return self._send(404, {"error": "unknown path " + path})
 def main():
@@ -552,6 +632,14 @@ def main():
         return
 
     url = "http://%s:%d/" % (args.host, port)
+    # 端口拿到之后才回放任务状态：如果只是「已经在运行」的第二个实例，
+    # 不能把第一个实例正在跑的任务误标成中断。
+    try:
+        n_interrupted = job_store.mark_interrupted()
+        if n_interrupted:
+            log("上次运行有 %d 个任务被中断，已标记为可重试" % n_interrupted)
+    except Exception as e:  # noqa: BLE001 - 任务记录坏了不能影响启动
+        log("任务状态加载失败：%s" % e)
     log("LangChain 适配：%s" % (
         ("已启用（langchain-core %s）" % lc_tools.VERSION) if lc_tools.HAS_LC
         else "未启用，使用内置实现"))

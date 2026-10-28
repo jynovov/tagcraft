@@ -2,6 +2,9 @@
 
 const $ = (id) => document.getElementById(id);
 
+const HIS_PER_PAGE = 10;   // 与 HISTORY_MAX = 30 对应：最多 3 页
+let hisPage = 1;           // 只存在当前页面内，不写 localStorage
+
 function renderStats(list) {
   const box = $('hisStats');
   if (!box) return;
@@ -26,11 +29,18 @@ function render() {
   renderStats(list);
 
   if (!list.length) {
+    hisPage = 1;
     $('list').innerHTML = '<div class="empty">还没有记录，去「生成」页跑一次吧。</div>';
+    renderPager($('hisPager'), 0, 0, () => {});
     return;
   }
 
-  $('list').innerHTML = list.map((h, i) => {
+  // 页码夹紧在有效范围内；第 1 页删光之类的调整由 render() 自动兜底
+  const pg = pageSlice(list, hisPage, HIS_PER_PAGE);
+  hisPage = pg.page;
+
+  $('list').innerHTML = pg.items.map((h, k) => {
+    const i = pg.start + k;   // 用全局下标，分页后载入 / 复制 / 删除仍指向同一条记录
     if (isKreaRecord(h)) {
       const prompt = h.prompt || [].concat(h.pos || []).join('\n');
       const short = String(prompt).replace(/\s+/g, ' ').trim();
@@ -84,11 +94,18 @@ function render() {
   });
   $('list').querySelectorAll('[data-del]').forEach(b => {
     b.addEventListener('click', () => {
+      const idx = +b.dataset.del;
       const list2 = loadHistory();
-      list2.splice(+b.dataset.del, 1);
+      if (idx < 0 || idx >= list2.length) return;
+      list2.splice(idx, 1);
       saveHistory(list2);
-      render();
+      render();   // 最后一页被删空时，pageSlice 会把页码夹回有效页
     });
+  });
+
+  renderPager($('hisPager'), pg.page, pg.pages, (delta) => {
+    hisPage = clampPage(hisPage + delta, loadHistory().length, HIS_PER_PAGE);
+    render();
   });
 }
 

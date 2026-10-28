@@ -14,7 +14,7 @@ import time
 
 from common import DATA_DIR
 
-CACHE_PATH = os.path.join(DATA_DIR, "cache.sqlite")
+CACHE_PATH = os.environ.get("TAGCRAFT_CACHE_PATH") or os.path.join(DATA_DIR, "cache.sqlite")
 TTL = int(os.environ.get("TAGCRAFT_CACHE_TTL") or 7 * 24 * 3600)
 MAX_ROWS = int(os.environ.get("TAGCRAFT_CACHE_MAX") or 1000)
 

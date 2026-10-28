@@ -25,9 +25,15 @@ const LS_PROMPT = 'tagcraft.prompt';            // NoobAI 系的系统提示词
 const LS_PROMPT_KREA = 'tagcraft.prompt.krea';  // Krea 2 的系统提示词
 const LS_FAVS = 'tagcraft.favs';
 const LS_COMFY = 'tagcraft.comfy';
+const LS_PREFS = 'tagcraft.prefs';              // 已保存的偏好（数组）
+const LS_PREFS_ACTIVE = 'tagcraft.prefs.active'; // 当前生效那套的 id（单选）
+const LS_PREFS_ON = 'tagcraft.prefs.on';         // "1" / "0"，总开关
+const LS_PLAN = 'tagcraft.plan';                 // 规划展示开关："1" 开 / 其它（含未设置）关
+const PREFS_MAX = 20;   // 一套最多 20 个 tag（也是发给模型的硬上限）
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
+  pref: '<path d="M4 7h9M20 7h-3M4 12h3M20 12h-9M4 17h11M20 17h-1"/><circle cx="15.5" cy="7" r="2.1"/><circle cx="9.5" cy="12" r="2.1"/><circle cx="17.5" cy="17" r="2.1"/>',
   fav: '<path d="M12 3.4l2.7 5.4 6 .9-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.7l6-.9z"/>',
   his: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.1 2"/>',
   comfy: '<rect x="3.2" y="4.8" width="17.6" height="14.4" rx="2.2"/><circle cx="8.6" cy="10" r="1.6"/><path d="M4 17.2l5-4.6 3.4 3 3-2.6 4.6 4.2"/>',
@@ -35,10 +41,11 @@ const ICONS = {
   off: '<path d="M12 4v7.2"/><path d="M7.6 6.7a7 7 0 109.1.2"/>'
 };
 
-/** 渲染侧边栏；active: 'gen' | 'fav' | 'his' | 'comfy' | 'set' */
+/** 渲染侧边栏；active: 'gen' | 'pref' | 'fav' | 'his' | 'comfy' | 'set' */
 function renderSidebar(active) {
   const items = [
     { k: 'gen', href: '/', label: '生成' },
+    { k: 'pref', href: '/preferences.html', label: '偏好' },
     { k: 'fav', href: '/favorites.html', label: '收藏' },
     { k: 'his', href: '/history.html', label: '历史' },
     { k: 'comfy', href: '/comfy.html', label: 'ComfyUI' },
@@ -158,8 +165,16 @@ function loadSettings() {
 }
 function saveSettings(s) { localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); }
 
+/* ---- 规划展示：默认关。关着时后端完全不调那次规划模型 ---- */
+function planOn() {
+  return localStorage.getItem(LS_PLAN) === '1';
+}
+function savePlanOn(on) {
+  localStorage.setItem(LS_PLAN, on ? '1' : '0');
+}
+
 /* ---- 历史记录：只保留最近 HISTORY_MAX 条 ---- */
-const HISTORY_MAX = 10;
+const HISTORY_MAX = 30;
 function loadHistory() {
   try {
     const list = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
@@ -210,22 +225,147 @@ function loadComfy() {
 }
 function saveComfy(c) { localStorage.setItem(LS_COMFY, JSON.stringify(c)); }
 
-/* ---- 草稿箱：可以同时存在多份方案，各自独立保存 ---- */
-const LS_WORKS = 'tagcraft.works';   // 全部草稿
-const LS_CUR = 'tagcraft.cur';       // 当前草稿 id
-const LS_WORK_OLD = 'tagcraft.work'; // 旧版单草稿（首次运行会迁移过来）
+/* ---------------------------------------------------------------- 偏好
+ * 一套「偏好」= 一组常驻 tag（固定画风、常用设定等）。生成时前端把当前那套
+ * 随请求发出去，后端拼到 system prompt 末尾；只对 tag 模式生效，Krea 2 不追加。
+ *
+ *   tagcraft.prefs        [{id, name, tags:[字符串], updated}]  最多 40 套
+ *   tagcraft.prefs.active 当前生效那套的 id（只有一个，单选）
+ *   tagcraft.prefs.on     "1" / "0"；从未设置过时算开（有生效的那套才真的会发）
+ */
+const PREFS_MAX_SETS = 40;
 
-function loadWorks() {
+/** 规整一组 tag：去空、去重（不分大小写）、空格换下划线、最多 PREFS_MAX 个 */
+function normalizePrefTags(tags) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(tags) ? tags : [])) {
+    if (raw == null) continue;
+    const t = String(raw).trim().replace(/\s+/g, '_');
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= PREFS_MAX) break;
+  }
+  return out;
+}
+
+/** 只认白名单字段，坏数据一律丢掉 */
+function normalizePrefSet(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const id = typeof x.id === 'string' ? x.id.trim() : '';
+  if (!id) return null;
+  const rawName = typeof x.name === 'string' ? x.name.trim() : '';
+  return {
+    id: id,
+    name: rawName ? rawName.slice(0, 30) : '未命名偏好',
+    tags: normalizePrefTags(x.tags),
+    updated: typeof x.updated === 'string' ? x.updated : ''
+  };
+}
+
+function loadPrefs() {
   try {
-    const list = JSON.parse(localStorage.getItem(LS_WORKS) || '[]');
-    return Array.isArray(list) ? list.filter(d => d && d.id) : [];
+    const list = JSON.parse(localStorage.getItem(LS_PREFS) || '[]');
+    return (Array.isArray(list) ? list : [])
+      .map(normalizePrefSet).filter(Boolean).slice(0, PREFS_MAX_SETS);
   } catch (e) { return []; }
 }
-function saveWorks(list) {
-  try { localStorage.setItem(LS_WORKS, JSON.stringify(list.slice(0, 60))); } catch (e) { /* ignore */ }
+
+/** 存回去；返回实际保存的（已规整 / 截断）列表 */
+function savePrefs(list) {
+  const clean = (Array.isArray(list) ? list : [])
+    .map(normalizePrefSet).filter(Boolean).slice(0, PREFS_MAX_SETS);
+  localStorage.setItem(LS_PREFS, JSON.stringify(clean));
+  return clean;
 }
-function newDraftId() {
-  return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+function newPrefId() {
+  return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+/** 新建 / 覆盖一套；返回保存后的完整列表 */
+function upsertPrefs(set) {
+  const clean = normalizePrefSet(set);
+  const list = loadPrefs();
+  if (!clean) return list;
+  const i = list.findIndex(p => p.id === clean.id);
+  if (i >= 0) list[i] = clean; else list.unshift(clean);
+  return savePrefs(list);
+}
+
+/** 删除一套；删掉的正好是生效那套时，顺手把 active 清空 */
+function delPrefs(id) {
+  const list = savePrefs(loadPrefs().filter(p => p.id !== id));
+  if (loadPrefsActive() === String(id || '')) savePrefsActive('');
+  return list;
+}
+
+function loadPrefsActive() {
+  return String(localStorage.getItem(LS_PREFS_ACTIVE) || '').trim();
+}
+/** 设为当前生效；传空则取消选择。同一时间只留一个 id，天然单选 */
+function savePrefsActive(id) {
+  const key = String(id || '').trim();
+  if (!key) { localStorage.removeItem(LS_PREFS_ACTIVE); return ''; }
+  localStorage.setItem(LS_PREFS_ACTIVE, key);
+  return key;
+}
+
+/** 总开关；没设置过时算开（没有生效的偏好时本来也不会发任何东西） */
+function prefsOn() {
+  return localStorage.getItem(LS_PREFS_ON) !== '0';
+}
+function savePrefsOn(on) {
+  localStorage.setItem(LS_PREFS_ON, on ? '1' : '0');
+}
+
+/** 当前生效的那套；没选 / id 已经不存在时返回 null */
+function activePrefs() {
+  const id = loadPrefsActive();
+  if (!id) return null;
+  return loadPrefs().find(p => p.id === id) || null;
+}
+
+/** 生成请求里带的 prefs：开关关掉、或没有生效的那套时是空数组（最多 20 个） */
+function prefsTagsForRequest() {
+  if (!prefsOn()) return [];
+  const set = activePrefs();
+  return set ? set.tags.slice(0, PREFS_MAX) : [];
+}
+
+/** 从收藏与历史里找常用 tag：pos / quality 字段，出现 ≥ minCount 次，按次数取前 limit 个 */
+function prefCandidates(favs, history, minCount, limit) {
+  const min = Math.max(2, parseInt(minCount, 10) || 2);
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
+  const counts = new Map();   // 小写 key → {tag, count}
+  const eat = rows => {
+    for (const raw of (Array.isArray(rows) ? rows : [])) {
+      if (raw == null) continue;
+      const t = String(raw).trim();
+      if (!t) continue;
+      const k = t.toLowerCase();
+      const hit = counts.get(k);
+      if (hit) hit.count += 1;
+      else counts.set(k, { tag: t, count: 1 });
+    }
+  };
+  const scan = list => {
+    for (const rec of (Array.isArray(list) ? list : [])) {
+      if (!rec || typeof rec !== 'object') continue;
+      eat(rec.pos);
+      eat(rec.quality);
+    }
+  };
+  scan(favs);
+  scan(history);
+  return Array.from(counts.values())
+    .filter(c => c.count >= min)
+    .sort((a, b) => (b.count - a.count) ||
+      (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
+    .slice(0, cap);
 }
 
 function isQuality(chip) {
@@ -379,6 +519,53 @@ function historyStats(list) {
     avgScore: scoreCount ? scoreSum / scoreCount : null,
     avgMs: msCount ? msSum / msCount : null
   };
+}
+
+/* ---------------------------------------------------------------- 列表分页
+ * 页码只存在页面内的变量里（不写 localStorage）；数据一变就重新夹紧到有效页。 */
+function pageCount(total, perPage) {
+  const per = Math.max(1, perPage | 0);
+  return Math.max(1, Math.ceil(Math.max(0, total | 0) / per));
+}
+
+function clampPage(page, total, perPage) {
+  const p = parseInt(page, 10);
+  return Math.min(Math.max(isNaN(p) ? 1 : p, 1), pageCount(total, perPage));
+}
+
+/** 取当前页的数据，并返回夹紧后的页码 / 总页数 / 全局起始下标 */
+function pageSlice(list, page, perPage) {
+  const rows = Array.isArray(list) ? list : [];
+  const per = Math.max(1, perPage | 0);
+  const current = clampPage(page, rows.length, per);
+  const start = (current - 1) * per;
+  return {
+    page: current,
+    pages: pageCount(rows.length, per),
+    start: start,
+    items: rows.slice(start, start + per)
+  };
+}
+
+/** 分页控件：上一页 / 第 x / y 页 / 下一页；首末页对应按钮禁用 */
+function renderPager(host, page, pages, onGo) {
+  if (!host) return;
+  if (!pages) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML =
+    '<button class="small" data-page-prev="1"' + (page <= 1 ? ' disabled' : '') + '>上一页</button>' +
+    '<span class="pager-info">第 ' + page + ' / ' + pages + ' 页</span>' +
+    '<button class="small" data-page-next="1"' + (page >= pages ? ' disabled' : '') + '>下一页</button>';
+  host.querySelectorAll('[data-page-prev]').forEach(b => {
+    b.addEventListener('click', () => { if (!b.disabled) onGo(-1); });
+  });
+  host.querySelectorAll('[data-page-next]').forEach(b => {
+    b.addEventListener('click', () => { if (!b.disabled) onGo(1); });
+  });
 }
 
 /* ---------------------------------------------------------------- 收藏导出

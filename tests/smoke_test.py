@@ -145,6 +145,7 @@ def main():
         say("页面：")
         for path, must in [("/", "中文转 tag"),
                            ("/krea.html", "Krea 2 提示词"),
+                           ("/preferences.html", "偏好"),
                            ("/favorites.html", "收藏"),
                            ("/history.html", "历史记录"),
                            ("/comfy.html", "工作流"),
@@ -157,7 +158,7 @@ def main():
 
         say("静态资源：")
         for path in ("/style.css", "/common.js", "/app.js", "/krea.js", "/settings.js",
-                     "/history.js", "/favorites.js", "/comfy.js"):
+                     "/history.js", "/favorites.js", "/preferences.js", "/comfy.js"):
             st, body = get(path)
             check("GET " + path, st == 200 and len(body) > 300, "%d 字节" % len(body))
 

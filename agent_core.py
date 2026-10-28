@@ -18,7 +18,7 @@ import lc_tools
 
 from dict_db import QUALITY_TAGS, get_tag, search_tags, suggest_for, validate_tags
 
-from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, SYSTEM_PROMPT, _extract_json, _post_chat, get_model
+from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, SYSTEM_PROMPT, _extract_json, _post_chat, get_model, prefs_prompt_block
 
 
 
@@ -168,6 +168,100 @@ CRITIC_SYSTEM = """你是 SDXL 动漫模型（NoobAI-XL 系）提示词的审核
 - 数量是否合理（正向 25~45 个，负向 4~12 个）
 如果你认为已经足够好，可以把 positive/negative 原样返回，并给出高分。
 """
+
+
+PLAN_TAG_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的规划助手。用户会给你一段中文画面描述。
+
+请先做一份简短的画面规划，只输出一个 JSON（不要解释、不要 Markdown 代码块）：
+{
+  "elements": ["画面里真正可画的要素，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑"],
+  "queries": ["为了确认英文写法，打算去词表里查的中文或英文关键词，最多 6 条"]
+}
+
+注意：
+- 这个规划只用于展示，不会自动执行；不要输出 tag 本身，也不要输出最终 JSON 结果。
+- queries 要具体，指向描述里「这个英文怎么说才准」的要素。
+"""
+
+
+PLAN_NATURAL_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类模型）的规划助手。用户会给你一段中文画面描述。
+
+请先做一份简短的画面规划，只输出一个 JSON（不要解释、不要 Markdown 代码块）：
+{
+  "elements": ["画面里真正可画的要素，每条 2~12 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑"],
+  "queries": ["为了确认中英术语对照，打算查询的中文或英文关键词，最多 6 条"]
+}
+
+注意：
+- 这个规划只用于展示，不会自动执行；不要写出英文提示词，也不要输出最终 JSON 结果。
+- 规划面向自然语言提示词：要素要能连成一段画面描述，queries 指向拿不准英文说法的概念。
+"""
+
+
+_PLAN_MAX_ELEMENTS = 12
+_PLAN_MAX_QUERIES = 10
+
+
+def _clean_plan(parsed):
+    """把模型给的计划规整成 {"elements": [...], "queries": [...]}。
+
+    宽容处理：字符串当单条、非列表当空；去空、去重、限量。
+    两条列表都空时返回 None（视为没拿到可用计划）。
+    """
+    if not isinstance(parsed, dict):
+        return None
+
+    def as_list(key):
+        v = parsed.get(key)
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            return []
+        out, seen = [], set()
+        for raw in v:
+            text = " ".join(str(raw if raw is not None else "").split())
+            text = text.strip("-·、,，;；")
+            if not text:
+                continue
+            k = text.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(text)
+        return out
+
+    elements = as_list("elements")[:_PLAN_MAX_ELEMENTS]
+    queries = as_list("queries")[:_PLAN_MAX_QUERIES]
+    if not elements and not queries:
+        return None
+    return {"elements": elements, "queries": queries}
+
+
+def plan_generate(cfg, text, natural=False, temperature=0.3, model=None):
+    """生成一份展示用计划；任何失败都返回 (None, 原因)，绝不抛异常。
+
+    只发一次请求，不参与查词循环，也不自动执行 queries。
+    """
+    system = PLAN_NATURAL_SYSTEM if natural else PLAN_TAG_SYSTEM
+    payload = {
+        "model": (model if model is not None else (cfg.get("model") or "")).strip(),
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": text}],
+        "temperature": max(0.0, min(0.4, float(temperature))),
+        "stream": False,
+    }
+    try:
+        body = _post_chat(cfg, payload, retries=1)
+    except Exception as e:  # noqa: BLE001 - 计划失败不能拖垮生成
+        return None, "计划调用失败：%s" % e
+    try:
+        content = body["choices"][0]["message"].get("content") or ""
+    except Exception:  # noqa: BLE001
+        return None, "计划调用返回格式异常"
+    plan = _clean_plan(_extract_json(content))
+    if not plan:
+        return None, "计划调用没有返回可用的 JSON"
+    return plan, ""
 
 
 def _brief_tag(h):
@@ -348,7 +442,8 @@ def prompt_style_warnings(prompt):
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                    max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
-                   progress=None, prompt_model=DEFAULT_MODEL, system_prompt=""):
+                   progress=None, prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None,
+                   plan=False):
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
@@ -382,6 +477,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             system += "\n本次正向 tag 数量上限：%d 个。\n" % int(max_tags)
     if extra_rules:
         system += "\n补充要求：" + extra_rules + "\n"
+    if not natural:
+        system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
 
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": text}]
@@ -413,6 +510,22 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         return ref_lo + (i - 1) * band + band * max(0.0, min(1.0, sub))
 
     say("读到中文描述（%d 字），开始分析画面要素" % len(text), 4)
+
+    # 规划展示（默认关）：在查词循环之前多调一次模型，产出一份只用于展示的计划。
+    # 关掉时这里一次请求都不发；失败也只记一条轨迹，生成照常继续。
+    plan_info = None
+    if plan:
+        say("正在规划画面要素与查词方向…", 5)
+        plan_info, plan_err = plan_generate(cfg, text, natural=natural,
+                                           temperature=temperature, model=model)
+        stats["llm_calls"] += 1
+        if plan_info:
+            say("计划就绪：%d 个画面要素、%d 个查词方向"
+                % (len(plan_info["elements"]), len(plan_info["queries"])), 5.5)
+        else:
+            trace.append({"round": 0, "tool": "计划", "args": {},
+                          "summary": "计划没生成出来（%s），继续按原流程生成" % plan_err})
+            say("计划没生成出来，继续生成（不影响结果）")
 
     for rnd in range(1, max_r + 1):
         payload = {"model": model, "messages": messages,
@@ -516,17 +629,23 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             parsed = {"prompt": content, "negative": "", "notes": ""}
 
     if not parsed or not isinstance(parsed, dict):
-        return {"raw": content, "parsed": None, "trace": trace, "stats": stats,
-                "tools_used": tools_ok,
-                "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
+        out = {"raw": content, "parsed": None, "trace": trace, "stats": stats,
+               "tools_used": tools_ok,
+               "error": "模型没有返回合法 JSON，已把原文给你，可手动整理"}
+        if plan_info:
+            out["plan"] = plan_info
+        return out
 
     # ---- Krea 2：英文自然语言 ----
     if natural:
         fields = natural_fields(parsed, content)
         if not fields["prompt"]:
-            return {"raw": content, "parsed": parsed, "trace": trace, "stats": stats,
-                    "tools_used": tools_ok, "mode": "natural",
-                    "error": "模型没有给出英文提示词，已把原文给你，可手动整理"}
+            out = {"raw": content, "parsed": parsed, "trace": trace, "stats": stats,
+                   "tools_used": tools_ok, "mode": "natural",
+                   "error": "模型没有给出英文提示词，已把原文给你，可手动整理"}
+            if plan_info:
+                out["plan"] = plan_info
+            return out
         stats["words"] = word_count(fields["prompt"])
         stats["warnings"] = prompt_style_warnings(fields["prompt"])
         say("整理英文提示词：%d 词" % stats["words"], 64.8)
@@ -535,6 +654,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             "prompt": fields["prompt"], "notes": fields["notes"],
             "trace": trace, "stats": stats, "tools_used": tools_ok, "review": None,
         }
+        if plan_info:
+            out["plan"] = plan_info
         if reflect:
             say("进入自省环节：让审核员给这段提示词打分", 66)
             try:
@@ -564,6 +685,8 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         "trace": trace, "stats": stats, "tools_used": tools_ok,
         "review": None,
     }
+    if plan_info:
+        out["plan"] = plan_info
     if reflect:
         say("进入自省环节：让审核员给这套 tag 打分", 66)
         try:

@@ -2,6 +2,9 @@
 
 const $ = (id) => document.getElementById(id);
 
+const FAV_PER_PAGE = 12;   // 收藏上限 120 条，最多 10 页
+let favPage = 1;           // 只存在当前页面内，不写 localStorage
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -70,11 +73,18 @@ function render() {
   $('btnExport').disabled = !list.length;
 
   if (!list.length) {
+    favPage = 1;
     $('list').innerHTML = '<div class="empty">还没有收藏。去「生成」页生成一次，然后点右上角 ★ 收藏这套。</div>';
+    renderPager($('favPager'), 0, 0, () => {});
     return;
   }
 
-  $('list').innerHTML = list.map((f, i) => {
+  // 页码夹紧在有效范围内；最后一页删空后自动回退
+  const pg = pageSlice(list, favPage, FAV_PER_PAGE);
+  favPage = pg.page;
+
+  $('list').innerHTML = pg.items.map((f, k) => {
+    const i = pg.start + k;   // 全局下标，分页后载入 / 改名 / 删除仍指向同一条
     if (isKreaRecord(f)) return kreaCard(f, i);
     const q = f.quality || [], p = f.pos || [], n = f.neg || [];
     const all = [].concat(q, p);
@@ -156,8 +166,13 @@ function render() {
       if (!item) return;
       if (!confirm('删除这条收藏？')) return;
       delFav(item.id);
-      render();
+      render();   // 最后一页被删空时自动回退到有效页
     });
+  });
+
+  renderPager($('favPager'), pg.page, pg.pages, (delta) => {
+    favPage = clampPage(favPage + delta, loadFavs().length, FAV_PER_PAGE);
+    render();
   });
 }
 

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagCraft · 偏好</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <div id="sidebar"></div>
+
+  <div class="main">
+    <div class="page-head">
+      <h1 class="page-title">偏好</h1>
+      <span class="head-right">
+        <span id="prefCount" class="pill">0 套</span>
+        <a id="toSettings" class="page-sub" href="/settings.html">开关在「设置」页 →</a>
+      </span>
+    </div>
+
+    <div class="stack wide">
+      <div class="card">
+        <div class="card-title">
+          当前生效的一套
+          <span class="spacer"></span>
+          <span id="curName" class="fmeta">还没有生效的偏好</span>
+        </div>
+        <div class="page-sub" style="margin-bottom:10px">
+          这套 tag 会跟着每次生成一起发给模型（只对 tag 模式生效，Krea 2 页不带）。
+          它只是「偏好」：和画面描述冲突时以描述为准，你也可以随时在设置页关掉。
+        </div>
+        <div class="row" style="margin-top:0">
+          <input id="tagInput" class="mono" style="flex:1;min-width:220px"
+                 placeholder="输入 tag 后回车，例如 long_hair">
+          <button id="btnAddTag" class="small primary">添加</button>
+          <button id="btnRenameCur" class="small ghost">改名</button>
+          <button id="btnNew" class="small">新建一套</button>
+        </div>
+        <div class="row">
+          <span id="curState" class="page-sub"></span>
+          <span class="spacer"></span>
+          <span id="curCount" class="page-sub">0 / 20 个 tag</span>
+        </div>
+        <div id="curTags" class="tags"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          候选（从收藏 / 历史提取）
+          <span class="spacer"></span>
+          <button id="btnCand" class="small">提取候选</button>
+        </div>
+        <div class="page-sub" style="margin-bottom:10px">
+          扫一遍收藏和历史里的正向 tag 与质量词，出现 2 次以上的挑出来（最多 20 个）。
+          点一个就加进上面那套。
+        </div>
+        <div id="cands" class="tags"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">已保存的偏好</div>
+        <div class="page-sub" style="margin-bottom:12px">
+          可以存多套（例如「厚涂画风」「某个角色」），用「使用」切换生效的那套；同一时间只有一套生效。
+        </div>
+        <div id="list" class="fgrid"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script src="preferences.js"></script>
+</body>
+</html>

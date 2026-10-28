@@ -206,16 +206,6 @@ button.primary .ripple{
 }
 .warn-line.show{display:block}
 
-/* ---------------- 草稿箱 ---------------- */
-.draftbar{
-  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  background:var(--panel);border:1px solid var(--line);border-radius:14px;
-  padding:10px 14px;margin-bottom:16px;box-shadow:var(--shadow)
-}
-.draftbar .dlabel{font-size:12.5px;color:var(--dim);font-weight:600}
-.draftbar select{width:auto;max-width:280px;min-width:150px;padding:7px 10px}
-.draftbar #draftHint{margin-left:auto}
-
 /* ---------------- 结果分组 ---------------- */
 .group{margin-top:16px}
 .group-title{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);margin-bottom:8px}
@@ -335,6 +325,9 @@ button.primary .ripple{
   font-size:12.5px;color:#8a6a4a;margin-top:7px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis
 }
+/* 「上次运行被中断」时的重试行 */
+.retry-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;color:#8a6a4a}
+.retry-row span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 
 /* ---------------- 统计 / 说明 ---------------- */
@@ -385,6 +378,11 @@ button.primary .ripple{
 .htext{font-size:12.5px;color:#7d6753;margin:7px 0 5px;white-space:pre-wrap;word-break:break-word}
 .htags{font-family:Consolas,monospace;font-size:11.5px;color:var(--dim);
   line-height:1.7;word-break:break-word}
+
+/* ---------------- 列表分页（历史 / 收藏） ---------------- */
+.pager{display:flex;align-items:center;gap:10px;margin-top:14px}
+.pager[hidden]{display:none}
+.pager-info{font-size:12.5px;color:var(--dim)}
 
 /* ---------------- 收藏页：宽屏多列，卡片铺满 ---------------- */
 .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(430px,1fr));gap:12px;margin-top:0}
