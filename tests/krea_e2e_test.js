@@ -109,7 +109,7 @@ function waitUp(port, ms = 25000) {
       vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
     }
 
-    console.log('== A. 生成 → 进度 → 填回界面');
+    console.log('== A. 生成 → 填回界面');
     const KREA_MARK = 'ZZZ_E2E_KREA_PROMPT';
     store['tagcraft.settings'] = JSON.stringify({
       apiBase: API.api_base, apiKey: API.api_key, model: API.model,
@@ -120,19 +120,8 @@ function waitUp(port, ms = 25000) {
     el('inputText').value = '黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头';
     el('useAgent').checked = true;
 
-    vm.runInContext('generate()', ctx);
-    const widths = [];
-    let done = false;
-    for (let i = 0; i < 250; i++) {
-      await sleep(120);
-      const html = els['progress'] ? els['progress'].innerHTML : '';
-      const m = /width:([0-9.]+)%/.exec(html);
-      if (m) {
-        const w = Number(m[1]);
-        if (widths[widths.length - 1] !== w) widths.push(w);
-      }
-      if (vm.runInContext('!!(state.progress && state.progress.done)', ctx)) { done = true; break; }
-    }
+    // Krea2 已改成单次请求（不带工具），generate() 本身就是一次 fetch
+    await vm.runInContext('generate()', ctx);
     await sleep(300);
     const out = JSON.parse(vm.runInContext(
       'JSON.stringify({prompt: state.prompt, noNeg: state.negative === undefined, ' +
@@ -141,11 +130,7 @@ function waitUp(port, ms = 25000) {
     const toasts = created.filter(e => String(e.className).indexOf('toast') >= 0)
                           .map(e => String(e.textContent || ''));
 
-    check('任务跑完', done);
-    check('进度条出现多个中间位置', widths.filter(w => w > 2 && w < 98).length >= 3,
-          JSON.stringify(widths));
-    check('进度条最终到 100%', widths.length > 0 && widths[widths.length - 1] === 100,
-          JSON.stringify(widths.slice(-3)));
+    check('生成完成', !!out.prompt);
     check('英文提示词填回界面', out.prompt.indexOf('over-the-knee socks') >= 0,
           out.prompt.slice(0, 60));
     check('结果框里也是同一段提示词', out.out === out.prompt);

@@ -40,6 +40,13 @@
           <label>API Key</label>
           <input id="apiKey" type="password" class="mono" placeholder="sk-…">
         </div>
+        <div class="field">
+          <label>辅助模型名（可空，空 = 用主模型）</label>
+          <input id="auxModel" class="mono" placeholder="概念 / 计划 / 评审用，例如 deepseek-chat">
+        </div>
+        <div class="page-sub">
+          辅助模型只用于概念映射、查词计划和自省评审；最终生成仍用主模型。留空则全部用主模型。
+        </div>
         <div class="row">
           <button id="btnSave" class="primary">保存</button>
           <button id="btnTest">测试连接</button>
@@ -55,25 +62,22 @@
             <input id="agentRounds" type="number" min="1" max="12" value="6">
           </div>
           <div class="field">
-            <label>自省轮数（0 = 关闭）</label>
+            <label>自省轮数（tag 默认 2 / Krea 默认 4，0 = 关闭）</label>
             <input id="reflectRounds" type="number" min="0" max="4" value="2">
           </div>
         </div>
         <label class="inline check" style="margin-top:12px">
-          <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写
+          <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写（tag 模式）
         </label>
         <label class="inline check" style="margin-top:12px">
           <input id="plan" type="checkbox"> 规划展示（生成前先让模型列出画面要素与查词计划）
         </label>
-        <label class="inline check" style="margin-top:12px">
-          <input id="strict" type="checkbox" checked> 严格查词（先抽概念，再用词表核对）
-        </label>
         <div class="page-sub" style="margin-top:8px">
-          严格查词只对 tag 模式生效：生成前先让模型抽一轮画面概念，服务端逐条拿
-          get_tag / resolve_alias / search_tags 映射到词表，只允许使用「已确认」的 tag；
-          未确认的只能从候选里挑。关掉则完全跳过概念抽取与注入。
-          <br>开启后会在生成前多调一次模型（同时开着「规划展示」时会合并成一次，不多花请求）；
-          Krea2 页不做词表校验，不受这个开关影响。
+          tag 模式始终做概念核对（没有开关）：第一轮请求里让模型顺带提交画面概念，
+          服务端逐条拿 get_tag / resolve_alias / search_tags 映射到词表，只允许使用「已确认」的 tag；
+          未确认的只能从候选里挑。确认不足 3 个时跳过注入，统计照常记录。
+          开了「规划展示」时概念与计划合并成一次调用，不会多花请求。
+          <br>Krea2 页不做词表校验，不受影响。
         </div>
         <div class="page-sub" style="margin-top:8px">
           开启后会在生成之前（Agent 模式下是查词循环之前）多调一次模型，产出一份
@@ -82,7 +86,8 @@
           <br>生成页勾选「Agent 模式」后生效：模型自己决定调用词表工具（search_tags / get_tag /
           validate_tags / suggest_tags）查证写法，最多跑 N 轮；随后由审核环节打分（0-100）
           并输出修正后的 tag。轮数越多越稳，但更慢也更费 token。
-          <br>Krea2 页沿用这里的轮数设置，但它不做词表校验，工具只有「中英术语对照」一个。
+          <br>Krea2 页不带任何工具：描述直接写成英文提示词，再做自省评审；它有自己的「自省」开关，
+          轮数默认 4（早停规则照常生效）。
         </div>
       </div>
 

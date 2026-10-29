@@ -291,8 +291,8 @@ def main():
             print("启动失败：假大模型或被测服务没起来")
             return 2
 
-        print("== 联调：严格查词 + 自省 → 候选补充")
-        st, b = post(base, "/api/agent", {"text": text + "-wl", "strict": True,
+        print("== 联调：概念核对 + 自省 → 候选补充")
+        st, b = post(base, "/api/agent", {"text": text + "-wl",
                                           "reflect": True, "reflect_rounds": 2,
                                           "api": dict(api)})
         if st != 200:
@@ -314,7 +314,7 @@ def main():
                   str((r.get("review") or {}).get("candidates")))
 
             print("== 联调：缓存结果结构一致")
-            st2, b2 = post(base, "/api/agent", {"text": text + "-wl", "strict": True,
+            st2, b2 = post(base, "/api/agent", {"text": text + "-wl",
                                                 "reflect": True, "reflect_rounds": 2,
                                                 "api": dict(api)})
             r2 = json.loads(b2) if st2 == 200 else {}

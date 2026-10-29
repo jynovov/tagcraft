@@ -341,18 +341,17 @@ chk('分项为 null 时不崩', (function () {
   return document.getElementById('review').innerHTML.indexOf('覆盖') < 0;
 })());
 
-/* ---------- 17. 严格查词开关（默认开，单独一个键） ---------- */
+/* ---------- 17. 概念核对没有开关（tag 模式始终开启） ---------- */
 localStorage.clear();
-chk('严格查词默认开', strictOn() === true);
-chk('读取默认值不写 localStorage', localStorage.getItem('tagcraft.strict') === null);
-saveStrictOn(false);
-chk('关掉严格查词', strictOn() === false &&
-    localStorage.getItem('tagcraft.strict') === '0');
-saveStrictOn(true);
-chk('重新打开严格查词', strictOn() === true &&
-    localStorage.getItem('tagcraft.strict') === '1');
-chk('严格查词不混进 settings 表',
-    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').strict === undefined);
+chk('common.js 不再提供严格查词开关',
+    typeof strictOn === 'undefined' && typeof saveStrictOn === 'undefined');
+chk('不写 tagcraft.strict', localStorage.getItem('tagcraft.strict') === null);
+chk('辅助模型读写函数可用',
+    typeof auxModelName === 'function' && typeof saveAuxModel === 'function');
+saveAuxModel('fast-model');
+chk('辅助模型写进 settings 表',
+    auxModelName() === 'fast-model' &&
+    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').auxModel === 'fast-model');
 
 /* ---------- 18. 轨迹里的概念核对摘要 ---------- */
 state.stats = { model: 4, tool_calls: 2, checked: 8, unknown: 1, ms: 1000,

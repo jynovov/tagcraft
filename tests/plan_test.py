@@ -160,8 +160,8 @@ def main():
         r_off1 = json.loads(b) if st == 200 else {}
         check("关计划首次生成成功", st == 200 and bool(r_off1.get("positive")), b[:160])
         check("关计划结果里没有 plan 字段", "plan" not in r_off1)
-        check("关计划模型调用 3 次（没有多调计划）",
-              (r_off1.get("stats") or {}).get("llm_calls") == 3,
+        check("关计划模型调用 2 次（概念合并在第一轮，没有多调计划）",
+              (r_off1.get("stats") or {}).get("llm_calls") == 2,
               str((r_off1.get("stats") or {}).get("llm_calls")))
         st, b = post(base, "/api/agent", {"text": cache_text, "reflect": False,
                                           "plan": False, "api": dict(api, model="mock-plan")})
@@ -187,8 +187,8 @@ def main():
         r = json.loads(b) if st == 200 else {}
         new_calls = read_calls()[n0:]
         check("关计划生成成功", st == 200 and bool(r.get("positive")), b[:160])
-        check("确实发了 3 次模型请求", len(new_calls) == 3, "实际 %d" % len(new_calls))
-        check("这 3 次里没有一次是计划请求",
+        check("确实发了 2 次模型请求", len(new_calls) == 2, "实际 %d" % len(new_calls))
+        check("这 2 次里没有一次是计划请求",
               all(not is_plan_call(c) for c in new_calls))
 
         print("== 开计划（tag 模式）")
@@ -253,9 +253,12 @@ def main():
             check("Krea2 计划结构同样是 elements/queries",
                   bool(plan and isinstance(plan.get("elements"), list)
                        and isinstance(plan.get("queries"), list)))
-            check("Krea2 模型调用 3 次（计划 + 2 生成）",
-                  (r.get("stats") or {}).get("llm_calls") == 3,
+            check("Krea2 模型调用 2 次（计划 + 1 生成，不再查词）",
+                  (r.get("stats") or {}).get("llm_calls") == 2,
                   str((r.get("stats") or {}).get("llm_calls")))
+            check("Krea2 计划里不再有查词方向",
+                  bool(plan and plan.get("queries") == []),
+                  str((plan or {}).get("queries")))
             check("Krea2 计划请求是第一次",
                   bool(new_calls) and is_plan_call(new_calls[0]))
             check("Krea2 用的是自然语言版计划提示词",

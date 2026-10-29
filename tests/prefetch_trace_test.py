@@ -208,7 +208,7 @@ def integration_checks(mock, app, base, api):
     print("== 联调：概念降级时，「计划预查」轨迹仍在概念之前")
     n0 = len(read_calls())
     st, b = post(base, "/api/agent", {"text": text + "-order", "plan": True,
-                                      "strict": True, "reflect": False,
+                                      "reflect": False,
                                       "api": dict(api, model="mock-noconcept")})
     r = json.loads(b) if st == 200 else {}
     trace = r.get("trace") or []

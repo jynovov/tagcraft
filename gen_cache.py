@@ -44,6 +44,7 @@ def make_key(kind, text, cfg, prompt_model, **opts):
         "kind": kind,
         "text": (text or "").strip(),
         "model": (cfg or {}).get("model") or "",
+        "aux_model": (cfg or {}).get("aux_model") or "",
         "api_base": (cfg or {}).get("api_base") or "",
         "prompt_model": prompt_model,
         "opts": {k: opts[k] for k in sorted(opts)},

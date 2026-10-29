@@ -117,9 +117,12 @@ def main():
             review = r.get("review") or {}
             pos = [h["tag"] for h in (r.get("positive") or [])]
             check("POST /api/agent 成功", True)
-            check("工具调用 2 次", stats.get("tool_calls") == 2, "实际 %s" % stats.get("tool_calls"))
-            check("模型调用 5 次（3 生成 + 2 自省）", stats.get("llm_calls") == 5,
+            check("工具调用 3 次（概念合并 + 查词 + 校验）",
+                  stats.get("tool_calls") == 3, "实际 %s" % stats.get("tool_calls"))
+            check("模型调用 4 次（2 生成 + 2 自省）", stats.get("llm_calls") == 4,
                   "实际 %s" % stats.get("llm_calls"))
+            check("轨迹里有 submit_concepts",
+                  any(t["tool"] == "submit_concepts" for t in trace))
             check("轨迹里有 search_tags", any(t["tool"] == "search_tags" for t in trace))
             check("轨迹里有 validate_tags", any(t["tool"] == "validate_tags" for t in trace))
             check("查词结果来自真实词表", "thighhighs" in json.dumps(trace, ensure_ascii=False))
@@ -128,8 +131,12 @@ def main():
             check("自省跑满 2 轮", review.get("iterations") == 2)
             check("第 1 轮 78 分", (review.get("rounds") or [{}])[0].get("score") == 78)
             check("自省收敛到 95 分", review.get("final_score") == 95)
-            check("自省改写了 tag 列表", "orange_sky" in pos)
+            check("自省改写了 tag 列表（池内概念进正向）", "school_uniform" in pos)
             check("自省后编造的 tag 被清掉", all(t != "zzz_fake_tag_zzz" for t in pos))
+            check("池外新增词进候选补充",
+                  "orange_sky" in [c.get("tag") for c in
+                                   (r.get("positive_candidates") or [])],
+                  str([c.get("tag") for c in (r.get("positive_candidates") or [])]))
             check("正向 tag 带中文名与热度字段",
                   all("cn" in h for h in (r.get("positive") or [])))
             with open(DUMP, encoding="utf-8") as f:

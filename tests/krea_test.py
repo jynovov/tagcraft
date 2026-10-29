@@ -7,7 +7,7 @@ Krea 2 模式测试：不需要 API Key，也不会花钱。
     tests/mock_llm.py   —— 假的 OpenAI 兼容接口（按自然语言剧本演戏）
     server.py           —— 被测的本地服务
 然后验证：
-    模型档案、英文自然语言提示词生成、术语对照工具、自省重写、
+    模型档案、英文自然语言提示词生成（不带任何工具）、自省重写、
     单次生成、只重跑自省、工具/自省开关、后台任务进度、参数校验、
     以及「不传 prompt_model 时仍然是原来的 tag 模式」这条回归线。
 
@@ -119,7 +119,7 @@ def main():
         else:
             check("status 返回两个模型", False, b[:200])
 
-        print("== 智能体：英文自然语言提示词 + 术语工具 + 自省")
+        print("== 智能体链路：英文自然语言提示词 + 不带工具 + 自省")
         st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
                                           "max_tags": 40, "max_rounds": 6,
                                           "reflect": True, "reflect_rounds": 2, "api": api})
@@ -139,11 +139,13 @@ def main():
             check("Krea2 结果不带负向提示词", "negative" not in r,
                   str(r.get("negative")))
             check("词数统计可用", stats.get("words", 0) >= 20, str(stats.get("words")))
-            check("工具调用 1 次（术语对照）", stats.get("tool_calls") == 1,
-                  str(stats.get("tool_calls")))
-            check("模型调用 4 次（2 生成 + 2 自省）", stats.get("llm_calls") == 4,
+            check("工具调用 0 次（Krea2 不再带工具）",
+                  stats.get("tool_calls") in (0, None), str(stats.get("tool_calls")))
+            check("模型调用 3 次（1 生成 + 2 自省）", stats.get("llm_calls") == 3,
                   str(stats.get("llm_calls")))
-            check("轨迹里是 lookup_term", any(t.get("tool") == "lookup_term" for t in trace))
+            check("轨迹里没有任何工具调用",
+                  all(t.get("tool") not in ("lookup_term", "search_tags")
+                      for t in trace), str([t.get("tool") for t in trace]))
             check("自省跑满 2 轮", review.get("iterations") == 2)
             check("第 1 轮 78 分", (review.get("rounds") or [{}])[0].get("score") == 78)
             check("自省收敛到 95 分", review.get("final_score") == 95)
@@ -158,18 +160,44 @@ def main():
             natural_calls = [c for c in calls
                              if "Krea 2" in json.dumps(c.get("messages") or [],
                                                        ensure_ascii=False)]
-            tool_names = set()
-            for c in natural_calls:
-                for t in (c.get("tools") or []):
-                    tool_names.add((t.get("function") or {}).get("name"))
-            check("发给模型的是 lookup_term 工具",
-                  tool_names == {"lookup_term"}, str(tool_names))
+            check("Krea2 请求都不带 tools",
+                  all(not c.get("tools") for c in natural_calls),
+                  "带 tools 的请求 %d" % sum(1 for c in natural_calls if c.get("tools")))
+            check("Krea2 请求里不出现 lookup_term",
+                  "lookup_term" not in json.dumps(natural_calls, ensure_ascii=False))
             tool_msgs = [m for c in natural_calls for m in (c.get("messages") or [])
                          if m.get("role") == "tool"]
-            check("术语查询结果以 role=tool 回填",
-                  any("thighhighs" in (m.get("content") or "") for m in tool_msgs))
-            check("回填内容明确提醒「写成句子」",
-                  any("自然语言" in (m.get("content") or "") for m in tool_msgs))
+            check("Krea2 没有工具结果回填", not tool_msgs, str(len(tool_msgs)))
+
+        print("== Krea2 自省：默认 4 轮 / 显式 2 轮 / 关掉不评审")
+        st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
+                                          "reflect": True,
+                                          "api": dict(api, model="reflect4")})
+        r = json.loads(b) if st == 200 else {}
+        rv = r.get("review") or {}
+        check("Krea2 默认自省跑满 4 轮", rv.get("iterations") == 4,
+              str(rv.get("iterations")))
+        check("默认 4 轮时模型调用 5 次（1 生成 + 4 自省）",
+              (r.get("stats") or {}).get("llm_calls") == 5,
+              str((r.get("stats") or {}).get("llm_calls")))
+        check("4 轮都低于 92，最终采用最高分 85", rv.get("final_score") == 85,
+              str(rv.get("final_score")))
+        st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
+                                          "reflect": True, "reflect_rounds": 2,
+                                          "api": dict(api, model="reflect4")})
+        r = json.loads(b) if st == 200 else {}
+        rv = r.get("review") or {}
+        check("显式传 2 轮时只跑 2 轮", rv.get("iterations") == 2,
+              str(rv.get("iterations")))
+        st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
+                                          "reflect": False,
+                                          "api": dict(api, model="reflect4")})
+        r = json.loads(b) if st == 200 else {}
+        check("关掉自省开关时 0 轮评审", r.get("review") is None
+              and bool(r.get("prompt")), b[:160])
+        check("关掉自省时只有 1 次生成调用",
+              (r.get("stats") or {}).get("llm_calls") == 1,
+              str((r.get("stats") or {}).get("llm_calls")))
 
         print("== 自省分数回落时，采用最高分那轮的提示词")
         st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
@@ -223,17 +251,20 @@ def main():
                                             "prompt": "", "api": api})
         check("没有提示词时拒绝 krea 自省", st == 400 and "提示词" in b, "HTTP %s" % st)
 
-        print("== 开关：不用工具 / 不开自省")
+        print("== 关掉自省：只做单次生成")
         st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",
                                           "use_tools": False, "reflect": False, "api": api})
         if st == 200:
             r = json.loads(b)
-            check("关掉工具与自省也能出提示词", bool(r.get("prompt")))
+            check("关掉自省也能出提示词", bool(r.get("prompt")))
             check("关掉后没有工具调用记录",
                   (r.get("stats") or {}).get("tool_calls") in (0, None))
             check("关掉后没有自省记录", r.get("review") is None)
+            check("关掉后只有 1 次模型调用",
+                  (r.get("stats") or {}).get("llm_calls") == 1,
+                  str((r.get("stats") or {}).get("llm_calls")))
         else:
-            check("关掉工具与自省也能出提示词", False, b[:200])
+            check("关掉自省也能出提示词", False, b[:200])
 
         print("== 自定义系统提示词（设置页里改的那份）")
         krea_mark = "ZZZ_CUSTOM_KREA_PROMPT"

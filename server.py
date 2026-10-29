@@ -28,7 +28,7 @@ from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_cou
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _clean_prompt, agent_generate, concept_generate, concepts_prompt_block, map_concepts, natural_fields, negative_space_conflict_trace, plan_generate, plan_prefetch_detail, prefetch_trace_summary, prompt_style_warnings, reorder_hits, resolve_negative_space_conflict, self_refine, self_refine_natural, tool_get_tag, tool_lookup_term, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _CONCEPT_MIN_INJECT, _clean_prompt, agent_generate, concept_generate, concept_injection_block, concepts_prompt_block, map_concepts, natural_fields, negative_space_conflict_trace, plan_generate, plan_prefetch_detail, prefetch_trace_summary, prompt_style_warnings, reorder_hits, resolve_negative_space_conflict, self_refine, self_refine_natural, tool_get_tag, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -154,20 +154,53 @@ def _clean_prefs(raw):
     return out
 
 
+def _apply_api_overrides(cfg, body):
+    """界面上填的临时配置优先：api 覆盖 + 辅助模型名（空 = 用主模型）。
+
+    tag 模式的概念核对没有开关，始终开启；Krea 模式不受影响。
+    """
+    ui = body.get("api") or {}
+    for k in ("api_base", "api_key", "model"):
+        if (ui.get(k) or "").strip():
+            cfg[k] = ui[k].strip()
+    if "aux_model" in body:
+        cfg["aux_model"] = str(body.get("aux_model") or "").strip()
+    elif (ui.get("aux_model") or "").strip():
+        cfg["aux_model"] = ui["aux_model"].strip()
+    return cfg
+
+
+def _reflect_rounds_of(body, natural):
+    """自省轮数：Krea 2 默认 4 轮，tag 模式默认 2 轮；显式传 0 就是关闭。"""
+    raw = body.get("reflect_rounds")
+    if raw is None:
+        return 4 if natural else 2
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 4 if natural else 2
+
+
 def _single_concept_parts(concepts, err):
-    """单次生成的严格查词：映射 + 注入段 + 失败轨迹（纯本地，不调模型）。"""
+    """单次生成的概念核对：映射 + 注入段 + 失败轨迹（纯本地，不调模型）。
+
+    确认数不足 3 个时不注入（和 Agent 模式口径一致），只记统计与轨迹。
+    """
     if not concepts:
         return ({"concepts_confirmed": 0, "concepts_unknown": 0}, "",
                 [{"round": 0, "tool": "概念", "args": {},
                   "summary": "概念抽取没成功（%s），跳过概念核对，继续生成"
                              % (err or "没有拿到概念")}])
     mapping = map_concepts(concepts)
-    return (
-        {"concepts_confirmed": len(mapping["confirmed"]),
-         "concepts_unknown": len(mapping["unknown"])},
-        concepts_prompt_block(mapping),
-        [],
-    )
+    stats = {"concepts_confirmed": len(mapping["confirmed"]),
+             "concepts_unknown": len(mapping["unknown"])}
+    block = concept_injection_block(mapping)
+    if block:
+        return stats, block, []
+    return (stats, "",
+            [{"round": 0, "tool": "概念", "args": {},
+              "summary": "概念确认不足 %d 个，已跳过注入，继续生成"
+                         % _CONCEPT_MIN_INJECT}])
 
 
 class Server(ThreadingHTTPServer):
@@ -352,11 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 return self._send(400, {"error": "请先输入中文描述"})
             cfg = load_config()
-            # 界面上填的临时配置优先
-            ui = body.get("api") or {}
-            for k in ("api_base", "api_key", "model"):
-                if (ui.get(k) or "").strip():
-                    cfg[k] = ui[k].strip()
+            # 界面上填的临时配置优先（含辅助模型名）
+            _apply_api_overrides(cfg, body)
             if not (cfg.get("api_key") or "").strip():
                 return self._send(400, {
                     "error": "还没有填 API Key。请在右上角「模型设置」里填写，"
@@ -373,29 +403,29 @@ class Handler(BaseHTTPRequestHandler):
             natural = get_model(pm)["mode"] == "natural"
             prefs = [] if natural else _clean_prefs(body.get("prefs"))
             plan_flag = bool(body.get("plan", False))
-            # 严格查词只对 tag 模式生效；旧客户端不传时按关处理（兼容既有行为）
-            strict_flag = bool(body.get("strict", False)) and not natural
+            aux = (cfg.get("aux_model") or "").strip() or (cfg.get("model") or "").strip()
             ckey = ""
             if gen_cache.enabled(cfg):
                 ckey = gen_cache.make_key("single", text, cfg, pm, max_tags=max_tags,
                                           temperature=temperature, extra_rules=extra_rules,
                                           system_prompt=sys_prompt, prefs=prefs,
-                                          plan=plan_flag, strict=strict_flag)
+                                          plan=plan_flag)
                 hit = gen_cache.get(ckey)
                 if hit:
                     hit["cached"] = True
                     log("命中缓存：%s…" % text[:16])
                     return self._send(200, hit)
-            # 规划展示 / 严格查词：单次生成也支持（放在真正生成之前）；
-            # 两个都开时合并成一次请求，失败只记轨迹、不中断。
+            # 概念核对（tag 模式始终开启）/ 规划展示：单次生成放在真正生成之前。
+            # 单次请求没法像 Agent 那样再回填一次 submit_concepts 工具结果，
+            # 所以这里保留单独的概念调用（计划也开着时两件事合并成一次）；
+            # 失败只记轨迹、不中断。
             plan_info, plan_trace = None, []
             prefetch_trace = []
             conflict_trace = []
             concept_trace, concept_stats, concept_block = [], {}, ""
-            if plan_flag and strict_flag:
+            if plan_flag and not natural:
                 concepts, plan_info, concept_err = concept_generate(
-                    cfg, text, temperature=temperature,
-                    model=(cfg.get("model") or "").strip(), with_plan=True)
+                    cfg, text, temperature=temperature, model=aux, with_plan=True)
                 if not plan_info:
                     plan_trace.append({"round": 0, "tool": "计划", "args": {},
                                        "summary": "计划没生成出来（%s），继续生成"
@@ -404,15 +434,13 @@ class Handler(BaseHTTPRequestHandler):
                     concepts, concept_err)
             elif plan_flag:
                 plan_info, plan_err = plan_generate(
-                    cfg, text, natural=natural, temperature=temperature,
-                    model=(cfg.get("model") or "").strip())
+                    cfg, text, natural=True, temperature=temperature, model=aux)
                 if not plan_info:
                     plan_trace.append({"round": 0, "tool": "计划", "args": {},
                                        "summary": "计划没生成出来（%s），继续生成" % plan_err})
-            elif strict_flag:
+            else:
                 concepts, _, concept_err = concept_generate(
-                    cfg, text, temperature=temperature,
-                    model=(cfg.get("model") or "").strip())
+                    cfg, text, temperature=temperature, model=aux)
                 concept_stats, concept_block, concept_trace = _single_concept_parts(
                     concepts, concept_err)
             # 计划预查：本地查词表，把结果拼进注入段（不调模型、加了也不算调用）。
@@ -508,10 +536,7 @@ class Handler(BaseHTTPRequestHandler):
             # 只重跑自省：接口繁忙导致自省失败时，用它补救，不用重新生成整套 tag
             text = (body.get("text") or "").strip()
             cfg = load_config()
-            ui = body.get("api") or {}
-            for k in ("api_base", "api_key", "model"):
-                if (ui.get(k) or "").strip():
-                    cfg[k] = ui[k].strip()
+            _apply_api_overrides(cfg, body)
             if not (cfg.get("api_key") or "").strip():
                 return self._send(400, {"error": "还没有填 API Key"})
 
@@ -530,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "words": word_count(prompt)}}
                 try:
                     review = self_refine_natural(cfg, text, result,
-                                                 rounds=int(body.get("reflect_rounds") or 2))
+                                                 rounds=_reflect_rounds_of(body, True))
                 except Exception as e:  # noqa: BLE001
                     return self._send(500, {"error": str(e)})
                 log("重跑 Krea2 自省：%s 轮%s" % (
@@ -558,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                       "stats": {"llm_calls": 0, "tool_calls": 0}}
             try:
                 review = self_refine(cfg, text, result,
-                                     rounds=int(body.get("reflect_rounds") or 2))
+                                     rounds=_reflect_rounds_of(body, False))
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": str(e)})
             log("重跑自省：%s 轮%s" % (review.get("iterations"),
@@ -577,10 +602,7 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 return self._send(400, {"error": "请先输入中文描述"})
             cfg = load_config()
-            ui = body.get("api") or {}
-            for k in ("api_base", "api_key", "model"):
-                if (ui.get(k) or "").strip():
-                    cfg[k] = ui[k].strip()
+            _apply_api_overrides(cfg, body)
             if not (cfg.get("api_key") or "").strip():
                 return self._send(400, {
                     "error": "还没有填 API Key。请在「设置」页填写，"
@@ -591,21 +613,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "不认识的模型：%s" % pm})
             natural = get_model(pm)["mode"] == "natural"
             prefs = [] if natural else _clean_prefs(body.get("prefs"))
-            # 严格查词只对 tag 模式生效；旧客户端不传时按关处理（兼容既有行为）
-            strict_flag = bool(body.get("strict", False)) and not natural
             kwargs = dict(
                 extra_rules=(body.get("extra_rules") or ""),
                 max_tags=int(body.get("max_tags") or 45),
                 temperature=float(body.get("temperature") or 0.6),
                 max_rounds=int(body.get("max_rounds") or 6),
                 reflect=bool(body.get("reflect", True)),
-                reflect_rounds=int(body.get("reflect_rounds") or 2),
+                reflect_rounds=_reflect_rounds_of(body, natural),
                 use_tools=bool(body.get("use_tools", True)),
                 prompt_model=pm,
                 system_prompt=(body.get("system_prompt") or ""),
                 prefs=prefs,
                 plan=bool(body.get("plan", False)),
-                strict=strict_flag,
+                aux_model=(cfg.get("aux_model") or "").strip(),
             )
             akind = "krea" if natural else "agent"
             ckey = ""
@@ -653,6 +673,7 @@ class Handler(BaseHTTPRequestHandler):
             if not (cfg.get("api_key") or "").strip():
                 return self._send(400, {"error": "还没有填 API Key，无法重试"})
             kwargs = job_store.clean_kwargs(old.get("kwargs") or {})
+            kwargs.pop("strict", None)   # 旧任务可能存过已删除的开关，重试时丢掉
             jid = _start_async_job(text, pm, kwargs, cfg)
             log("重试被中断的任务 %s → 新任务 %s" % (old_id, jid))
             return self._send(200, {"job_id": jid})

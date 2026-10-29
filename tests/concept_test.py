@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-严格查词（概念抽取）测试：不需要 API Key，也不会花钱。
+概念核对测试：不需要 API Key，也不会花钱。
 
 它会自己拉起两个进程：
-    tests/mock_llm.py   —— 假的 OpenAI 兼容接口（带概念抽取剧本）
+    tests/mock_llm.py   —— 假的 OpenAI 兼容接口（带概念/查词剧本）
     server.py           —— 被测的本地服务
 
-覆盖：
+tag 模式始终做概念核对（没有开关）：
     * 纯本地映射：get_tag / resolve_alias / search_tags 的确认与候选
     * 注入段内容（已确认 / 未确认 / 禁止自造）
+    * 合并：第一轮请求带 submit_concepts 伪工具，生成总调用数 3 → 2
+    * 未调用 submit_concepts 时降级（不注入、不报错）
+    * 确认不足 3 个时跳过注入（统计照常）
     * 服务端硬约束：不通过的 tag 从 positive 移除、进 positive_unknown
-    * 开关：strict=false 完全不发概念请求、不注入
-    * 降级：概念返回非 JSON / 接口报错 → 跳过注入，生成照常
-    * 概念与规划合并成一次请求（不多花一次）
-    * 缓存 key 区分 strict；strict 结果不会污染非 strict 缓存
-    * 单次生成 / 后台任务 / Krea2 不受影响
+    * 单次生成保留独立概念调用（一次请求里没法回填工具结果）
+    * 缓存命中；Krea2 不受影响
 
 用法：
     python tests/concept_test.py
@@ -169,6 +169,23 @@ def unit_checks():
     check("空映射不注入", agent_core.concepts_prompt_block(
         {"confirmed": [], "unknown": []}) == "")
 
+    print("== 纯本地：确认不足 3 个跳过注入")
+    three = {"confirmed": [{"concept": "校服", "tag": "school_uniform"},
+                           {"concept": "逆光", "tag": "backlighting"},
+                           {"concept": "过膝袜", "tag": "thighhighs"}],
+             "unknown": [{"concept": "孤独感", "candidates": ["sad"]}]}
+    two = {"confirmed": three["confirmed"][:2], "unknown": []}
+    check("确认 3 个 → 有注入段",
+          "【概念核对】" in agent_core.concept_injection_block(three))
+    check("确认 2 个 → 跳过注入",
+          agent_core.concept_injection_block(two) == "")
+    check("确认 3 个的 tool 结果带已确认/未确认",
+          "已确认" in agent_core.concept_tool_result(three)
+          and "未确认" in agent_core.concept_tool_result(three)
+          and "school_uniform" in agent_core.concept_tool_result(three))
+    check("确认不足 3 个的 tool 结果写明跳过注入",
+          "确认不足 3 个，已跳过注入" in agent_core.concept_tool_result(two))
+
 
 def main():
     unit_checks()
@@ -196,56 +213,68 @@ def main():
             print("启动失败：假大模型或被测服务没起来")
             return 2
 
-        print("== 缓存 key：strict 要参与")
+        print("== 缓存 key：plan 要参与")
         cfg = {"model": api["model"], "api_base": api["api_base"]}
         opts = dict(max_tags=45, temperature=0.6, max_rounds=6, reflect=False,
                     reflect_rounds=2, use_tools=True, extra_rules="",
                     system_prompt="", prefs=[])
-        k_off = gen_cache.make_key("agent", text, cfg, "noob", plan=False,
-                                   strict=False, **opts)
-        k_on = gen_cache.make_key("agent", text, cfg, "noob", plan=False,
-                                  strict=True, **opts)
-        check("strict 开/关的缓存 key 不同", k_off != k_on)
+        k_off = gen_cache.make_key("agent", text, cfg, "noob", plan=False, **opts)
+        k_on = gen_cache.make_key("agent", text, cfg, "noob", plan=True, **opts)
+        check("关/开计划的缓存 key 不同", k_off != k_on)
         check("同参数缓存 key 稳定",
-              k_on == gen_cache.make_key("agent", text, cfg, "noob", plan=False,
-                                         strict=True, **opts))
+              k_off == gen_cache.make_key("agent", text, cfg, "noob", plan=False, **opts))
 
-        print("== strict=true：概念抽取 → 映射 → 注入 → 生成")
+        print("== tag 模式默认：第一轮 submit_concepts 合并概念核对")
         n0 = len(read_calls())
-        strict_text = "严格查词-%d" % time.time_ns()
-        st, b = post(base, "/api/agent", {"text": strict_text, "strict": True,
+        merged_text = "概念核对-%d" % time.time_ns()
+        st, b = post(base, "/api/agent", {"text": merged_text,
                                           "reflect": False, "api": api})
         r = json.loads(b) if st == 200 else {}
         calls = read_calls()[n0:]
         stats = r.get("stats") or {}
         trace = r.get("trace") or []
         pos = [h["tag"] for h in (r.get("positive") or [])]
-        check("strict=true 生成成功", st == 200 and bool(pos), b[:160])
+        check("生成成功", st == 200 and bool(pos), b[:160])
         check("概念确认数进 stats", stats.get("concepts_confirmed") is not None,
               str(stats))
         check("至少确认一个概念", (stats.get("concepts_confirmed") or 0) >= 1,
               str(stats.get("concepts_confirmed")))
         check("未确认概念也计数", (stats.get("concepts_unknown") or 0) >= 1,
               str(stats.get("concepts_unknown")))
-        check("模型调用 4 次（概念 1 + 生成 3）", stats.get("llm_calls") == 4,
+        check("模型调用 2 次（概念合并进第一轮）", stats.get("llm_calls") == 2,
               str(stats.get("llm_calls")))
-        check("工具调用仍是 2 次", stats.get("tool_calls") == 2,
-              str(stats.get("tool_calls")))
-        check("概念失败时不写降级轨迹",
+        check("工具调用 3 次（submit + search + validate）",
+              stats.get("tool_calls") == 3, str(stats.get("tool_calls")))
+        check("轨迹里有 submit_concepts",
+              any(t.get("tool") == "submit_concepts" for t in trace),
+              str([t.get("tool") for t in trace]))
+        check("成功时不写概念降级轨迹",
               all(t.get("tool") != "概念" for t in trace),
               str([t.get("tool") for t in trace]))
-        check("第一次请求是概念抽取",
-              bool(calls) and is_concept_call(calls[0]) and not is_plan_call(calls[0]))
-        check("概念请求不带 tools", bool(calls) and not calls[0].get("tools"))
+        check("没有单独的概念请求",
+              all(not is_concept_call(c) for c in calls),
+              "实际 %d 次请求" % len(calls))
         gcalls = gen_calls(calls)
-        check("生成请求都带概念注入段",
-              bool(gcalls) and all("【概念核对】" in sys_text(c) for c in gcalls),
-              str(len(gcalls)))
+        first_tools = {(t.get("function") or {}).get("name")
+                       for t in (calls[0].get("tools") or [])} if calls else set()
+        check("第一次请求带 submit_concepts 伪工具",
+              "submit_concepts" in first_tools, str(first_tools))
+        check("第一次请求提示必须先提交概念",
+              "先调用 submit_concepts" in sys_text(calls[0]) if calls else False)
+        check("第一轮还不能注入（概念刚提交），之后都带注入段",
+              bool(gcalls) and "【概念核对】" not in sys_text(gcalls[0])
+              and all("【概念核对】" in sys_text(c) for c in gcalls[1:]),
+              "生成请求 %d 次" % len(gcalls))
         check("注入段里有已确认的 tag",
               any("school_uniform" in sys_text(c) or "thighhighs" in sys_text(c)
-                  for c in gcalls))
+                  for c in gcalls[1:]))
         check("注入段写明未确认只能挑候选或省略",
-              any("候选" in sys_text(c) and "禁止自造" in sys_text(c) for c in gcalls))
+              any("候选" in sys_text(c) and "禁止自造" in sys_text(c)
+                  for c in gcalls[1:]))
+        check("概念映射结果以 tool 结果回填",
+              any("已确认" in (m.get("content") or "") and "未确认" in (m.get("content") or "")
+                  for c in calls for m in (c.get("messages") or [])
+                  if m.get("role") == "tool"))
 
         print("== 服务端硬约束：不通过的 tag 不进正向")
         check("编造的 tag 不在 positive", "zzz_fake_tag_zzz" not in pos, str(pos))
@@ -259,33 +288,34 @@ def main():
         check("parsed.positive 本身也干净", "zzz_fake_tag_zzz" not in parsed_pos,
               str(parsed_pos))
 
-        print("== strict=false：完全跳过概念抽取与注入")
+        print("== 旧客户端传 strict=false：没有开关，仍然做概念核对")
         n0 = len(read_calls())
-        off_text = "关闭严格查词-%d" % time.time_ns()
-        st, b = post(base, "/api/agent", {"text": off_text, "strict": False,
-                                          "reflect": False, "api": api})
+        st, b = post(base, "/api/agent", {"text": "旧字段-%d" % time.time_ns(),
+                                          "strict": False, "reflect": False,
+                                          "api": api})
         r = json.loads(b) if st == 200 else {}
         calls = read_calls()[n0:]
         stats = r.get("stats") or {}
-        check("strict=false 生成成功", st == 200 and bool(r.get("positive")), b[:160])
-        check("没有概念统计", "concepts_confirmed" not in stats, str(stats))
-        check("模型调用 3 次（没有概念请求）", stats.get("llm_calls") == 3,
-              str(stats.get("llm_calls")))
-        check("一次概念请求都没发", all(not is_concept_call(c) for c in calls),
-              "实际 %d 次请求" % len(calls))
-        check("生成请求里没有概念注入段",
-              all("【概念核对】" not in sys_text(c) for c in gen_calls(calls)))
+        check("传 strict=false 也生成成功", st == 200 and bool(r.get("positive")), b[:160])
+        check("strict=false 也带概念统计", stats.get("concepts_confirmed") is not None,
+              str(stats))
+        check("strict=false 也走合并链路（2 次调用）",
+              stats.get("llm_calls") == 2, str(stats.get("llm_calls")))
+        check("strict=false 也带 submit_concepts",
+              any("submit_concepts" in {(t.get("function") or {}).get("name")
+                                        for t in (c.get("tools") or [])}
+                  for c in calls))
 
-        print("== 降级：概念抽取返回非 JSON")
+        print("== 降级：模型没调用 submit_concepts")
         n0 = len(read_calls())
         st, b = post(base, "/api/agent", {"text": "坏概念-%d" % time.time_ns(),
-                                          "strict": True, "reflect": False,
+                                          "reflect": False,
                                           "api": dict(api, model="badconcept")})
         r = json.loads(b) if st == 200 else {}
         trace = r.get("trace") or []
         stats = r.get("stats") or {}
         calls = read_calls()[n0:]
-        check("概念非 JSON 时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
+        check("没提交概念时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
         check("失败时概念统计为 0/0",
               stats.get("concepts_confirmed") == 0 and stats.get("concepts_unknown") == 0,
               str(stats))
@@ -294,15 +324,45 @@ def main():
                   for t in trace), str(trace)[:240])
         check("降级时仍然没有注入",
               all("【概念核对】" not in sys_text(c) for c in gen_calls(calls)))
-        check("失败的概念请求也计入模型调用",
-              stats.get("llm_calls") == 4, str(stats.get("llm_calls")))
+        check("没提交概念时没有 submit_concepts 工具调用",
+              all(t.get("tool") != "submit_concepts" for t in trace),
+              str([t.get("tool") for t in trace]))
+        check("降级时按原查词节奏走（3 次模型调用）",
+              stats.get("llm_calls") == 3, str(stats.get("llm_calls")))
 
-        print("== 降级：概念接口报错")
-        st, b = post(base, "/api/agent", {"text": "概念报错-%d" % time.time_ns(),
-                                          "strict": True, "reflect": False,
-                                          "api": dict(api, model="concept-error")})
+        print("== 确认不足 3 个：跳过注入，统计照常")
+        n0 = len(read_calls())
+        st, b = post(base, "/api/agent", {"text": "概念太少-%d" % time.time_ns(),
+                                          "reflect": False,
+                                          "api": dict(api, model="fewconcept")})
         r = json.loads(b) if st == 200 else {}
-        check("概念接口报错时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
+        stats = r.get("stats") or {}
+        trace = r.get("trace") or []
+        calls = read_calls()[n0:]
+        gcalls = gen_calls(calls)
+        check("确认不足时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
+        check("统计仍记已确认 1 个 / 未确认 0 个",
+              stats.get("concepts_confirmed") == 1
+              and stats.get("concepts_unknown") == 0, str(stats))
+        check("submit_concepts 轨迹写明跳过注入",
+              any(t.get("tool") == "submit_concepts"
+                  and "跳过注入" in (t.get("summary") or "") for t in trace),
+              str([t.get("summary") for t in trace])[:240])
+        check("确认不足时不追加【概念核对】注入段",
+              bool(gcalls) and all("【概念核对】" not in sys_text(c) for c in gcalls))
+        check("tool 结果返回「确认不足 3 个，已跳过注入」",
+              any("确认不足 3 个，已跳过注入" in (m.get("content") or "")
+                  for c in calls for m in (c.get("messages") or [])
+                  if m.get("role") == "tool"))
+        check("确认不足时仍是 2 次模型调用",
+              stats.get("llm_calls") == 2, str(stats.get("llm_calls")))
+
+        print("== 降级：概念接口报错（单次生成仍保留独立概念调用）")
+        st, b = post(base, "/api/generate", {"text": "概念报错-%d" % time.time_ns(),
+                                             "api": dict(api, model="concept-error")})
+        r = json.loads(b) if st == 200 else {}
+        check("概念接口报错时单次生成照常完成",
+              st == 200 and bool(r.get("positive")), b[:160])
         check("轨迹里写明概念调用失败",
               any(t.get("tool") == "概念"
                   and "概念调用失败" in (t.get("summary") or "")
@@ -311,7 +371,7 @@ def main():
         print("== 概念与规划合并：只多花一次请求")
         n0 = len(read_calls())
         st, b = post(base, "/api/agent", {"text": "概念加规划-%d" % time.time_ns(),
-                                          "strict": True, "plan": True,
+                                          "plan": True,
                                           "reflect": False, "api": api})
         r = json.loads(b) if st == 200 else {}
         calls = read_calls()[n0:]
@@ -331,35 +391,30 @@ def main():
         check("合并模式也注入了概念核对",
               any("【概念核对】" in sys_text(c) for c in gen_calls(calls)))
 
-        print("== 缓存：strict 结果不会污染非 strict")
-        cache_text = "严格缓存-%d" % time.time_ns()
-        st, b = post(base, "/api/agent", {"text": cache_text, "strict": True,
+        print("== 缓存：同参数命中")
+        cache_text = "概念缓存-%d" % time.time_ns()
+        st, b = post(base, "/api/agent", {"text": cache_text,
                                           "reflect": False, "api": api})
         r1 = json.loads(b) if st == 200 else {}
-        check("strict=true 首次生成成功", st == 200 and bool(r1.get("positive")), b[:160])
+        check("首次生成成功", st == 200 and bool(r1.get("positive")), b[:160])
         n0 = len(read_calls())
-        st, b = post(base, "/api/agent", {"text": cache_text, "strict": False,
+        st, b = post(base, "/api/agent", {"text": cache_text,
                                           "reflect": False, "api": api})
         r2 = json.loads(b) if st == 200 else {}
-        check("strict=false 不会命中 strict=true 的缓存",
-              st == 200 and r2.get("cached") is not True, b[:160])
-        check("strict=false 重新发了 3 次生成请求",
-              len(read_calls()) - n0 == 3, "实际 %d" % (len(read_calls()) - n0))
-        st, b = post(base, "/api/agent", {"text": cache_text, "strict": True,
-                                          "reflect": False, "api": api})
-        r3 = json.loads(b) if st == 200 else {}
-        check("strict=true 第二次命中自己的缓存", r3.get("cached") is True)
+        check("同参数第二次命中缓存", r2.get("cached") is True, b[:160])
+        check("命中缓存不再发请求", len(read_calls()) - n0 == 0,
+              "实际 %d" % (len(read_calls()) - n0))
         check("缓存结果保留概念统计",
-              (r3.get("stats") or {}).get("concepts_confirmed") is not None)
+              (r2.get("stats") or {}).get("concepts_confirmed") is not None)
 
-        print("== 单次生成（不走智能体）也支持严格查词")
+        print("== 单次生成（不走智能体）：保留独立概念调用")
         n0 = len(read_calls())
-        st, b = post(base, "/api/generate", {"text": "单次严格-%d" % time.time_ns(),
-                                             "strict": True, "api": api})
+        st, b = post(base, "/api/generate", {"text": "单次概念-%d" % time.time_ns(),
+                                             "api": api})
         r = json.loads(b) if st == 200 else {}
         calls = read_calls()[n0:]
         stats = r.get("stats") or {}
-        check("单次严格生成成功", st == 200 and bool(r.get("positive")), b[:160])
+        check("单次生成成功", st == 200 and bool(r.get("positive")), b[:160])
         check("单次生成模型调用 2 次（概念 + 生成）",
               stats.get("llm_calls") == 2, str(stats.get("llm_calls")))
         check("单次生成带概念统计", (stats.get("concepts_confirmed") or 0) >= 1,
@@ -371,18 +426,10 @@ def main():
         check("单次生成的正向列表干净",
               all(t != "zzz_fake_tag_zzz" for t in
                   [h["tag"] for h in (r.get("positive") or [])]))
-        n0 = len(read_calls())
-        st, b = post(base, "/api/generate", {"text": "单次不严格-%d" % time.time_ns(),
-                                             "strict": False, "api": api})
-        r = json.loads(b) if st == 200 else {}
-        check("单次 strict=false 只发 1 次请求",
-              len(read_calls()) - n0 == 1, "实际 %d" % (len(read_calls()) - n0))
-        check("单次 strict=false 没有概念统计",
-              "concepts_confirmed" not in (r.get("stats") or {}))
 
-        print("== Krea2 不受严格查词影响")
+        print("== Krea2 不受概念核对影响")
         n0 = len(read_calls())
-        st, b = post(base, "/api/agent", {"text": text, "strict": True,
+        st, b = post(base, "/api/agent", {"text": text,
                                           "prompt_model": "krea", "reflect": False,
                                           "api": dict(api, model="mock-krea")})
         r = json.loads(b) if st == 200 else {}
@@ -394,13 +441,17 @@ def main():
               "实际 %d 次请求" % len(calls))
         check("Krea2 请求里没有概念注入段",
               all("【概念核对】" not in sys_text(c) for c in calls))
+        check("Krea2 请求里没有 submit_concepts",
+              all("submit_concepts" not in {(t.get("function") or {}).get("name")
+                                            for t in (c.get("tools") or [])}
+                  for c in calls))
 
         print("== 后台任务：进度与结果都带概念信息")
-        st, b = post(base, "/api/agent", {"text": "异步严格-%d" % time.time_ns(),
-                                          "strict": True, "reflect": False,
+        st, b = post(base, "/api/agent", {"text": "异步概念-%d" % time.time_ns(),
+                                          "reflect": False,
                                           "async": True, "api": api})
         if st != 200:
-            check("提交严格查词后台任务", False, b[:200])
+            check("提交概念核对后台任务", False, b[:200])
         else:
             jid = json.loads(b).get("job_id")
             status, result, steps, pct = "running", None, [], None

@@ -50,8 +50,7 @@ def main():
         check("%s 的必填参数一致" % n, new_req == old_req, (new_req, old_req))
 
     krea = server.tool_payload(True)
-    check("Krea 工具是 lookup_term",
-          [t["function"]["name"] for t in krea] == ["lookup_term"])
+    check("Krea 2 不再有任何工具", krea == [] and server.tool_payload("krea") == [])
 
     ok = lc_tools.validate_tag_dict({"positive": ["1girl"], "negative": ["lowres"],
                                      "notes": "n", "extra": 1})

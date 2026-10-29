@@ -83,30 +83,34 @@ chk('不会写旧版多份键', localStorage.getItem('tagcraft.krea.works') === 
 document.getElementById('inputText').value = '黄昏海边女生回头';
 state.prompt = WORDY;
 state.warnings = ['出现了权重语法，Krea 2 不需要'];
-state.stats = { model: 4, tool_calls: 1, words: 28, ms: 5200 };
-state.trace = [{ round: 1, tool: 'lookup_term', args: {}, summary: '术语查「过膝袜」' }];
+state.stats = { model: 3, tool_calls: 0, words: 28, ms: 5200 };
+state.trace = [];
 state.review = { rounds: [{ round: 1, score: 95, changed: 1,
     dimensions: { coverage: 5, fidelity: 5, readability: 4,
                   constraints: 5, consistency: 4 } }],
   final_score: 95, final_dims: { coverage: 5, fidelity: 5, readability: 4,
                                  constraints: 5, consistency: 4 },
   picked_round: 1, iterations: 1 };
-state.plan = { elements: ['黄昏海边'], queries: ['over-the-knee socks'] };
+state.plan = { elements: ['黄昏海边'], queries: [] };
 render();
 chk('英文提示词写进输出框', document.getElementById('outPrompt').value === WORDY);
 chk('页面逻辑里不再有负向字段', state.negative === undefined);
 chk('词数显示正确', document.getElementById('promptCount').innerHTML.indexOf('28') >= 0,
     document.getElementById('promptCount').innerHTML);
-chk('统计行显示术语查询次数',
-    document.getElementById('genStats').textContent.indexOf('术语查询') >= 0,
+chk('统计行不再显示术语查询',
+    document.getElementById('genStats').textContent.indexOf('术语') < 0,
     document.getElementById('genStats').textContent);
 chk('写法提醒会显示出来',
     document.getElementById('warnLine').textContent.indexOf('权重语法') >= 0);
-chk('工具轨迹渲染出来',
-    document.getElementById('trace').innerHTML.indexOf('lookup_term') >= 0);
-chk('Krea2 轨迹里概念核对显示「不适用」',
-    document.getElementById('trace').innerHTML.indexOf('概念核对') >= 0 &&
-    document.getElementById('trace').innerHTML.indexOf('不适用') >= 0);
+chk('没有工具轨迹时轨迹区收起',
+    document.getElementById('traceBox').hidden === true &&
+    document.getElementById('trace').innerHTML.indexOf('lookup_term') < 0);
+chk('Krea2 轨迹里不再有「概念核对」行',
+    document.getElementById('trace').innerHTML.indexOf('概念核对') < 0);
+chk('计划区只展示要素、不展示查词',
+    document.getElementById('plan').innerHTML.indexOf('要素') >= 0 &&
+    document.getElementById('plan').innerHTML.indexOf('查词') < 0,
+    document.getElementById('plan').innerHTML);
 chk('自省分数渲染出来',
     document.getElementById('reviewSum').textContent.indexOf('95') >= 0);
 const kreaDimHtml = document.getElementById('review').innerHTML;
@@ -120,8 +124,15 @@ chk('描述与提示词写进唯一一份',
     saved1.text === '黄昏海边女生回头' && saved1.prompt === WORDY);
 chk('写法提醒写进唯一一份', saved1.warnings.length === 1);
 chk('自省与计划写进唯一一份',
-    saved1.review.final_score === 95 && saved1.plan.queries[0] === 'over-the-knee socks');
+    saved1.review.final_score === 95 && saved1.plan.elements[0] === '黄昏海边');
 chk('Krea2 单份键不和 tag 页共用', localStorage.getItem('tagcraft.cur') === null);
+
+/* ---------- 2.1 自省开关（语义是「要不要评审」） ---------- */
+const ua = document.getElementById('useAgent');
+ua.checked = false;
+chk('自省开关关掉后写进草稿', statePayload().agent === false);
+ua.checked = true;
+chk('自省开关默认开', statePayload().agent === true);
 
 /* ---------- 3. 重新打开页面恢复 ---------- */
 document.getElementById('inputText').value = '';
@@ -134,7 +145,7 @@ chk('重开后写法提醒恢复',
     state.warnings.length === 1 && state.warnings[0].indexOf('权重语法') >= 0);
 chk('重开后自省评分恢复', state.review && state.review.final_score === 95);
 chk('重开后计划恢复',
-    state.plan && state.plan.queries[0] === 'over-the-knee socks');
+    state.plan && state.plan.elements[0] === '黄昏海边');
 render();
 chk('重开后输出框重新渲染', document.getElementById('outPrompt').value === WORDY);
 
@@ -230,7 +241,7 @@ chk('载入不会带出负向字段', state.negative === undefined);
 state.prompt = '';
 finishGenerate({ mode: 'natural', prompt: WORDY,
                  notes: '黄昏逆光', trace: [], review: null,
-                 stats: { llm_calls: 2, tool_calls: 1, words: 28, warnings: [] } }, 3000);
+                 stats: { llm_calls: 2, tool_calls: 0, words: 28, warnings: [] } }, 3000);
 chk('finishGenerate 填回提示词', state.prompt === WORDY);
 chk('finishGenerate 统计词数', state.stats.words === 28);
 chk('finishGenerate 保留备注', state.notes === '黄昏逆光');
@@ -239,6 +250,10 @@ return R;
 })();`;
 
 const rows = vm.runInContext(script, ctx, { filename: 'ui-krea-test' });
+const kreaHtml = fs.readFileSync(path.join(WS, 'krea.html'), 'utf8');
+rows.push(['Krea 页保留自省开关', /id="useAgent"/.test(kreaHtml)]);
+rows.push(['自省开关文案正确', /<input id="useAgent"[^>]*>\s*自省/.test(kreaHtml)]);
+rows.push(['Krea 页不再有术语对照', kreaHtml.indexOf('术语对照') < 0]);
 let bad = 0;
 for (const [name, ok, extra] of rows) {
   console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + name + (extra && !ok ? '  → ' + extra : ''));

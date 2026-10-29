@@ -192,16 +192,10 @@ chk('开计划时请求体 plan=true',
     __capture.bodies.length === 2 && __capture.bodies[1].plan === true,
     JSON.stringify(__capture.bodies[1] || {}).slice(0, 120));
 
-/* ---------- 5.1 请求体里的 strict 跟随「严格查词」开关 ---------- */
-chk('请求体默认带 strict=true',
-    __capture.bodies.length === 2 && __capture.bodies[0].strict === true,
+/* ---------- 5.1 请求体不再带 strict（tag 模式始终做概念核对） ---------- */
+chk('请求体不再带 strict 字段',
+    __capture.bodies.every(b => b.strict === undefined),
     JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
-saveStrictOn(false);
-await generate();
-chk('关严格查词时请求体 strict=false',
-    __capture.bodies.length === 3 && __capture.bodies[2].strict === false,
-    JSON.stringify(__capture.bodies[2] || {}).slice(0, 120));
-saveStrictOn(true);
 
 return R;
 })();`;
@@ -240,22 +234,24 @@ initDrafts();
 chk('Krea2 页新草稿默认没有计划', state.plan === null);
 
 $id('inputText').value = '黄昏海边';
-state.plan = { elements: ['主体：校服女生'], queries: ['过膝袜'] };
+state.plan = { elements: ['主体：校服女生'], queries: [] };
 render();
 chk('Krea2 页显示计划面板', $id('planBox').hidden === false);
 chk('Krea2 计划摘要正确',
     $id('planSum').textContent.indexOf('1 个要素') >= 0,
     $id('planSum').textContent);
-chk('Krea2 计划内容渲染',
+chk('Krea2 计划内容只渲染要素，不渲染查词',
     $id('plan').innerHTML.indexOf('校服女生') >= 0 &&
-    $id('plan').innerHTML.indexOf('过膝袜') >= 0);
+    $id('plan').innerHTML.indexOf('查词') < 0, $id('plan').innerHTML);
 
 finishGenerate({ mode: 'natural', prompt: 'A girl at dusk.',
-                 plan: { elements: ['主体'], queries: ['dusk'] },
-                 stats: { llm_calls: 3, tool_calls: 1, words: 4, warnings: [] } }, 800);
-chk('Krea2 finishGenerate 收下 plan', state.plan && state.plan.queries[0] === 'dusk');
+                 plan: { elements: ['主体'], queries: [] },
+                 stats: { llm_calls: 2, tool_calls: 0, words: 4, warnings: [] } }, 800);
+chk('Krea2 finishGenerate 收下 plan',
+    state.plan && state.plan.elements[0] === '主体');
 render();
-chk('Krea2 计划随草稿保存', curDraft().plan && curDraft().plan.queries[0] === 'dusk');
+chk('Krea2 计划随草稿保存',
+    curDraft().plan && curDraft().plan.elements[0] === '主体');
 
 state.plan = null;
 render();
@@ -270,6 +266,12 @@ chk('Krea2 请求体带 plan=true',
     JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
 chk('Krea2 请求仍然指定 krea 模型',
     __capture.bodies.length === 1 && __capture.bodies[0].prompt_model === 'krea');
+chk('Krea2 自省开关关闭时请求 reflect=false',
+    __capture.bodies.length === 1 && __capture.bodies[0].reflect === false,
+    JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
+chk('Krea2 请求默认自省 4 轮',
+    __capture.bodies.length === 1 && __capture.bodies[0].reflect_rounds === 4,
+    JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
 chk('Krea2 请求不带严格查词开关',
     __capture.bodies.length === 1 && __capture.bodies[0].strict === undefined,
     JSON.stringify(__capture.bodies[0] || {}).slice(0, 120));
@@ -288,6 +290,7 @@ return R;
   /* ================= 设置页（settings.js） ================= */
   const set = createPage(['common.js', 'settings.js'],
     () => Promise.reject(new Error('测试环境不联网')));
+  const setHtml = fs.readFileSync(path.join(WS, 'settings.html'), 'utf8');
 
   const setScript = `(() => {
 const R = [];
@@ -297,8 +300,9 @@ const $id = id => document.getElementById(id);
 localStorage.clear();
 init();
 chk('设置页默认不勾选规划展示', $id('plan').checked === false);
-chk('设置页默认勾选严格查词', $id('strict').checked === true);
-chk('默认不写严格查词键', localStorage.getItem('tagcraft.strict') === null);
+chk('设置页不再有严格查词勾选框', !/id="strict"/.test(setHtml));
+chk('不写 tagcraft.strict', localStorage.getItem('tagcraft.strict') === null);
+chk('设置页有辅助模型输入框', /id="auxModel"/.test(setHtml));
 
 savePlanOn(true);
 fill();
@@ -315,21 +319,17 @@ chk('设置页勾选即存', planOn() === true && localStorage.getItem('tagcraft
 chk('规划开关不混进 settings 表',
     JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').plan === undefined);
 
-$id('strict').checked = false;
-($id('strict')._on.change || []).forEach(fn => fn({ target: $id('strict') }));
-chk('设置页取消严格查词即存', strictOn() === false &&
-    localStorage.getItem('tagcraft.strict') === '0');
-
-$id('strict').checked = true;
-($id('strict')._on.change || []).forEach(fn => fn({ target: $id('strict') }));
-chk('设置页勾选严格查词即存', strictOn() === true &&
-    localStorage.getItem('tagcraft.strict') === '1');
-chk('严格查词不混进 settings 表',
-    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').strict === undefined);
+$id('auxModel').value = 'fast-aux';
+persist();
+chk('设置页把辅助模型写进 settings',
+    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').auxModel === 'fast-aux');
+fill();
+chk('设置页重新打开能回填辅助模型', $id('auxModel').value === 'fast-aux');
 
 return R;
 })();`;
 
+  set.ctx.setHtml = setHtml;
   const setRows = vm.runInContext(setScript, set.ctx, { filename: 'ui-plan-settings' });
 
   const rows = appRows.concat(kreaRows, setRows);

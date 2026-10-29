@@ -21,7 +21,7 @@
     <div id="modelSwitch" class="model-switch"></div>
 
     <div class="layout">
-      <!-- 左：输入 + 术语对照 -->
+      <!-- 左：输入 -->
       <div class="col">
         <div class="card">
           <div class="card-title">描述画面（中文）</div>
@@ -31,25 +31,16 @@
             <button id="btnExample" class="small ghost" title="随机挑几条中文示例，点一条填入">示例</button>
           </div>
           <div class="row">
-            <label class="inline check" title="让模型先查中英术语对照，再写提示词；自省由设置页控制">
-              <input id="useAgent" type="checkbox" checked> Agent 模式
+            <label class="inline check" title="开 = 生成后自动评审并改写；关 = 只做单次生成，不评审">
+              <input id="useAgent" type="checkbox" checked> 自省
             </label>
-            <span class="page-sub">自省看设置</span>
+            <span class="page-sub">开=生成后评审并改写；关=只生成</span>
           </div>
           <div class="row">
             <button id="btnGenerate" class="primary wide">生成提示词</button>
             <button id="btnClear" class="ghost">清空</button>
           </div>
           <div class="hint-line">英文自然语言，不用 tag 和权重语法。</div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">术语对照（中 → 英）</div>
-          <div class="row" style="margin-top:0">
-            <input id="termInput" type="text" placeholder="例如：过膝袜 / 逆光" style="flex:1;min-width:0">
-            <button id="btnTerm">查</button>
-          </div>
-          <div id="termResults" class="list scroll"></div>
         </div>
       </div>
 
@@ -70,7 +61,7 @@
           </details>
 
           <details id="traceBox" class="fold">
-            <summary id="traceSum">智能体工具调用轨迹</summary>
+            <summary id="traceSum">生成轨迹</summary>
             <div id="trace" class="fold-body"></div>
           </details>
 

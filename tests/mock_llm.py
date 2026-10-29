@@ -157,6 +157,9 @@ class Handler(BaseHTTPRequestHandler):
                 "elements": ["黄昏海边", "校服女生", "过膝袜", "回头看向镜头", "逆光"],
                 "queries": ["过膝袜", "夕阳", "looking_back"],
             }
+            if _is_natural(msgs):
+                # Krea 2 没有查词工具：计划只给要素，不给查词方向
+                out.pop("queries", None)
             # 严格查词与规划合并成一次调用时，同一个 JSON 里还要带 concepts。
             # 模型名带 noconcept 时故意只给计划、不给概念：用来验证「概念降级」的轨迹顺序。
             if _is_concept(msgs) and "noconcept" not in model.lower():
@@ -171,6 +174,29 @@ class Handler(BaseHTTPRequestHandler):
             if "concept-error" in model.lower():
                 return self._json({"error": {"message": "concept endpoint unavailable"}}, 400)
             return reply(json.dumps({"concepts": CONCEPT_SCRIPT}, ensure_ascii=False))
+
+        # ---- 概念核对伪工具（tag 模式第一轮）：提交概念 + 并行查词 ----
+        # 服务端会在第一轮请求里挂 submit_concepts；这里模拟模型并行调用它和查词工具，
+        # 这样严格链路的生成只需要 2 次模型请求（合并前是「概念单独 1 次 + 3 轮」）。
+        tool_names = {(t.get("function") or {}).get("name")
+                      for t in (body.get("tools") or [])}
+        tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+        if "submit_concepts" in tool_names and not tool_msgs:
+            if "badconcept" not in model.lower():
+                # fewconcept：只交 1 个概念（已确认不足 3 个 → 服务端跳过注入）
+                concepts = ["校服"] if "fewconcept" in model.lower() else CONCEPT_SCRIPT
+                return reply("", [
+                    {"id": "call_sc", "type": "function", "function": {
+                        "name": "submit_concepts",
+                        "arguments": json.dumps({"concepts": concepts}, ensure_ascii=False)}},
+                    {"id": "call_1", "type": "function", "function": {
+                        "name": "search_tags",
+                        "arguments": json.dumps({"query": "过膝袜"}, ensure_ascii=False)}},
+                    {"id": "call_2", "type": "function", "function": {
+                        "name": "validate_tags",
+                        "arguments": json.dumps({"tags": ["thighhighs", "zzz_fake_tag_zzz", "1girl"]},
+                                                ensure_ascii=False)}},
+                ])
 
         if "flaky" in model:
             left = FLAKY.get(model, 2)
@@ -213,6 +239,15 @@ class Handler(BaseHTTPRequestHandler):
                     "negative": ["worst_quality"],
                 }, ensure_ascii=False))
             if natural:
+                if "reflect4" in model.lower():
+                    # 每轮涨 5 分、都低于 92：验证 Krea2 默认能跑满 4 轮
+                    seq = [70, 75, 80, 85]
+                    score = seq[done] if done < len(seq) else 90
+                    return reply(json.dumps({
+                        "score": score, "dimensions": KREA_DIMS_LOW,
+                        "problems": ["还能再具体一点"], "missing": [],
+                        "prompt": KREA_PROMPT_V1 + " Refine pass %d." % done,
+                    }, ensure_ascii=False))
                 if drop:
                     if done == 0:
                         return reply(json.dumps({
@@ -271,13 +306,8 @@ class Handler(BaseHTTPRequestHandler):
                 "negative": ["worst_quality", "low_quality", "blurry"],
             }, ensure_ascii=False))
 
-        # ---- Krea 2：英文自然语言生成阶段 ----
+        # ---- Krea 2：英文自然语言生成阶段（不带工具，一次出提示词） ----
         if natural:
-            tool_msgs = [m for m in msgs if m.get("role") == "tool"]
-            if has_tools and not tool_msgs:
-                return reply("", [{"id": "call_k1", "type": "function", "function": {
-                    "name": "lookup_term",
-                    "arguments": json.dumps({"query": "过膝袜"}, ensure_ascii=False)}}])
             return reply(json.dumps({
                 "prompt": KREA_PROMPT_V1,
                 "notes": "按 Krea 2 的散文式写法整理，突出黄昏逆光",

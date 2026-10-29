@@ -164,7 +164,6 @@ function render() {
   if (state.stats) {
     const t = state.stats;
     s.textContent = '大模型 ' + (t.model || t.llm_calls || 1) + ' 次' +
-      (t.tool_calls ? ' · 术语查询 ' + t.tool_calls + ' 次' : '') +
       ' · ' + (t.words != null ? t.words : words) + ' 词' +
       (t.ms ? ' · ' + (t.ms / 1000).toFixed(1) + ' 秒' : '');
     s.classList.add('show');
@@ -189,24 +188,19 @@ function renderPlan() {
   const box = $('planBox');
   if (!box) return;
   const els = (p && Array.isArray(p.elements)) ? p.elements : [];
-  const qs = (p && Array.isArray(p.queries)) ? p.queries : [];
-  if (!els.length && !qs.length) {
+  if (!els.length) {
     box.hidden = true;
     $('plan').innerHTML = '';
     return;
   }
   box.hidden = false;
-  $('planSum').textContent = '画面规划 · ' + els.length + ' 个要素 · ' + qs.length + ' 个查词方向';
+  $('planSum').textContent = '画面规划 · ' + els.length + ' 个要素';
   $('plan').innerHTML =
     (els.length
       ? '<div class="step"><span class="tool">要素</span>' +
         '<span class="sum">' + els.map(escHtml).join('、') + '</span></div>'
       : '') +
-    (qs.length
-      ? '<div class="step"><span class="tool">查词</span>' +
-        '<span class="sum">' + qs.map(escHtml).join('、') + '</span></div>'
-      : '') +
-    '<div class="step"><span class="sum">计划只做展示，模型仍会自主决定查什么</span></div>';
+    '<div class="step"><span class="sum">计划只做展示</span></div>';
 }
 
 function renderTrace() {
@@ -218,10 +212,8 @@ function renderTrace() {
     return;
   }
   box.hidden = false;
-  $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
-  const conceptLine = '<div class="step"><span class="tool">概念</span>' +
-    '<span class="sum">概念核对 · 不适用（Krea 2 不做词表校验）</span></div>';
-  $('trace').innerHTML = conceptLine + tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
+  $('traceSum').textContent = '生成轨迹 · ' + tr.length + ' 步';
+  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
       <span class="rnd">${s.round}</span>
       <span class="tool">${s.tool}</span>
       <span class="sum">${escHtml(s.summary || '')}</span>
@@ -288,7 +280,6 @@ function finishGenerate(r, ms) {
   state.warnings = box.warnings || [];
   state.stats = {
     model: box.llm_calls || 1,
-    tool_calls: box.tool_calls || 0,
     words: box.words != null ? box.words : wordCount(state.prompt),
     ms: ms
   };
@@ -297,54 +288,31 @@ function finishGenerate(r, ms) {
 async function generate() {
   const text = $('inputText').value.trim();
   if (!text) { toast('先写点描述', true); return; }
-  const agent = $('useAgent').checked;
   const btn = $('btnGenerate');
   const st = loadSettings();
-  const reflect = st.reflect !== false;   // 自省统一由「设置」页开关控制
+  // 页面上的「自省」开关决定这次要不要评审；轮数用设置页的（默认 4，tag 模式是 2）
+  const doReflect = $('useAgent').checked;
   const body = {
     text,
     prompt_model: 'krea',
     temperature: st.temperature ? +st.temperature : 0.6,
-    max_rounds: st.agentRounds ? +st.agentRounds : 6,
-    reflect,
-    reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
+    reflect: doReflect,
+    reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 4,
     system_prompt: localStorage.getItem(LS_PROMPT_KREA) || '',
     plan: planOn(),   // 规划展示：关着时后端连那次模型都不调
+    aux_model: auxModelName(),   // 辅助模型（计划/评审）；空 = 主模型
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;
   btn.disabled = true;
-  btn.textContent = agent ? '智能体运行中…' : '生成中…';
-
-  if (agent) {
-    try {
-      const r = await api('/api/agent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({}, body, { async: true }))
-      });
-      if (!r.job_id) throw new Error('服务没有返回任务号');
-      sessionStorage.setItem(LS_JOB, r.job_id);
-      state.progress = { pct: 2, msg: '任务已提交，等待模型响应',
-                         startedAt: Date.now(), status: 'running', done: false };
-      state.trace = [];
-      state.review = null;
-      state.plan = null;
-      render();
-      startTick();
-      pollJob(r.job_id, btn);
-      return;
-    } catch (e) {
-      toast(e.message, true);
-      btn.disabled = false;
-      btn.textContent = '生成提示词';
-      return;
-    }
-  }
+  btn.textContent = '生成中…';
 
   const t0 = Date.now();
   toast('正在生成…');
   try {
-    const r = await api('/api/generate', {
+    // 走 /api/agent：Krea 2 已经没有工具，但自省开关需要 review 结果；
+    // reflect=false 时后端只跑一次生成、不评审。
+    const r = await api('/api/agent', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
@@ -585,7 +553,6 @@ function pushHistory(text) {
     pos: [state.prompt],
     stats: {
       llm_calls: st.model || 0,
-      tool_calls: st.tool_calls || 0,
       words: st.words || 0,
       ms: st.ms || 0
     },
@@ -611,6 +578,7 @@ async function retryReflect() {
         prompt_model: 'krea',
         prompt: state.prompt,
         reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
+        aux_model: auxModelName(),
         api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
       })
     });
@@ -681,28 +649,6 @@ async function sendToComfy() {
   }
 }
 
-/* ---------------------------------------------------------------- 术语对照 */
-
-async function doTerm() {
-  const q = $('termInput').value.trim();
-  if (!q) return;
-  try {
-    const r = await api('/api/dict/search?q=' + encodeURIComponent(q) + '&limit=12');
-    const list = r.results || [];
-    $('termResults').innerHTML = list.length ? list.map(h => `<div class="item">
-        <span class="name">${escHtml(h.tag)}</span>
-        <span class="cn">${escHtml(h.cn || '')}</span>
-        <span class="meta">${(h.post_count || 0).toLocaleString()}</span>
-        <span class="acts"><button class="small" data-term="${escHtml(h.tag)}">复制</button></span>
-      </div>`).join('') : '<div class="empty">没有结果</div>';
-    $('termResults').querySelectorAll('[data-term]').forEach(b => {
-      b.addEventListener('click', () => copy(b.dataset.term));
-    });
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
 /* ---------------------------------------------------------------- 载入外部记录 */
 
 function loadRecord(item) {
@@ -724,7 +670,7 @@ async function loadStatus() {
   try {
     const st = await api('/api/status');
     const d = st.dict || {};
-    $('kreaStatus').textContent = 'Krea 2 · 词表对照 ' + (d.count || 0).toLocaleString() + ' 条';
+    $('kreaStatus').textContent = 'Krea 2 · 英文自然语言';
     $('kreaStatus').title = d.source || '';
   } catch (e) {
     $('kreaStatus').textContent = '未连接服务';
@@ -757,8 +703,6 @@ function init() {
   $('btnCopyPrompt').addEventListener('click', () => copy($('outPrompt').value));
   bindExamplePicker('btnExample', 'inputText', saveWork);
   $('btnSendComfy').addEventListener('click', sendToComfy);
-  $('btnTerm').addEventListener('click', doTerm);
-  $('termInput').addEventListener('keydown', e => { if (e.key === 'Enter') doTerm(); });
 
   $('outPrompt').addEventListener('input', () => {
     state.prompt = $('outPrompt').value;
@@ -792,8 +736,6 @@ function init() {
 
   render();
   if (restored) toast('已恢复上次的内容');
-
-  resumeJob();
 }
 
 document.addEventListener('DOMContentLoaded', init);

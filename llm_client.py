@@ -232,7 +232,7 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
     else:
         system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
         if concept_block:
-            system += concept_block           # 概念核对（严格查词）追加在偏好之后
+            system += concept_block           # 概念核对（tag 模式始终开启）追加在偏好之后
 
     body = _post_chat(cfg, {
         "model": model,

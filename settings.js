@@ -92,19 +92,20 @@ function fill() {
   const s = loadSettings();
   $('apiBase').value = s.apiBase || '';
   $('model').value = s.model || '';
+  $('auxModel').value = s.auxModel || '';
   $('apiKey').value = s.apiKey || '';
   $('temperature').value = s.temperature || 0.6;
   $('agentRounds').value = s.agentRounds || 6;
   $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
   $('reflect').checked = s.reflect !== false;
   $('plan').checked = planOn();
-  $('strict').checked = strictOn();
 }
 
 function collect() {
   return {
     apiBase: $('apiBase').value.trim(),
     model: $('model').value.trim(),
+    auxModel: $('auxModel').value.trim(),
     apiKey: $('apiKey').value.trim(),
     temperature: $('temperature').value,
     agentRounds: +$('agentRounds').value || 6,
@@ -139,15 +140,9 @@ function init() {
     toast(on ? '规划展示已开启' : '规划展示已关闭');
   });
 
-  // 严格查词：单独一个键（tagcraft.strict），改动即存；默认开
-  $('strict').addEventListener('change', () => {
-    const on = $('strict').checked;
-    saveStrictOn(on);
-    toast(on ? '严格查词已开启' : '严格查词已关闭');
-  });
-
+  // 概念核对没有开关：tag 模式始终开启。
   // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）
-  ['apiBase', 'model', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',
+  ['apiBase', 'model', 'auxModel', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',
    'reflect', 'systemPrompt', 'systemPromptKrea'].forEach(id => {
     const el = $(id);
     el.addEventListener('input', queueSave);
