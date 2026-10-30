@@ -208,13 +208,14 @@ def unit_checks():
                                           ["1girl", "negative_space"]) == "")
     check("没有可补的返回空", agent_core.missing_prompt_block([], ["1girl"]) == "")
 
-    print("== 10. 概念抽取提示词覆盖抽象项")
-    for label, prompt in (("概念抽取", agent_core.CONCEPT_SYSTEM),
-                          ("概念+规划", agent_core.CONCEPT_PLAN_SYSTEM)):
-        check("%s 提示词覆盖构图/留白/氛围/材质/媒介" % label,
-              all(k in prompt for k in ("构图", "留白", "氛围", "材质", "媒介")))
-        check("%s 提示词有 2 个例子" % label,
-              prompt.count("例 1") >= 1 and prompt.count("例 2") >= 1)
+    print("== 10. 本地概念抽取：按出现顺序（不调模型）")
+    concepts = dict_db.local_concepts(
+        "黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头")
+    check("概念按原文出现顺序抽出",
+          concepts == ["黄昏", "校服", "过膝袜", "镜头"], str(concepts))
+    check("抽出来的概念都能映射到词表 tag",
+          all(agent_core.map_concepts([c])["confirmed"] for c in concepts), str(concepts))
+    check("空描述抽不到概念", dict_db.local_concepts("") == [])
 
 
 class FakeCritic:

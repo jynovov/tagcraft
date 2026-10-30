@@ -34,7 +34,7 @@ CONFIG_PATH = os.path.join(ROOT, "config.json")
 DEFAULT_CONFIG = {
     "api_base": "https://api.deepseek.com/v1/chat/completions",
     "api_key": "",
-    "model": "deepseek-chat",
+    "model": "deepseek-flash",
     "aux_model": "",
     "timeout": 120,
     "proxy": "",

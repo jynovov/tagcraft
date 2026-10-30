@@ -142,6 +142,21 @@ def main():
 
     try:
 
+        say("配置：")
+        sys.path.insert(0, ROOT)
+        import common  # noqa: E402 - 只在测试进程里读默认配置，不启动服务
+        check("默认模型是 deepseek-flash",
+              common.DEFAULT_CONFIG.get("model") == "deepseek-flash",
+              str(common.DEFAULT_CONFIG.get("model")))
+        try:
+            with open(os.path.join(ROOT, "config.example.json"), encoding="utf-8") as f:
+                example = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            example = {}
+            say("  config.example.json 读取失败：%s" % e)
+        check("config.example.json 同步默认模型",
+              example.get("model") == "deepseek-flash", str(example.get("model")))
+
         say("页面：")
         for path, must in [("/", "中文转 tag"),
                            ("/krea.html", "Krea 2 提示词"),

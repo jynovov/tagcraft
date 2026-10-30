@@ -117,12 +117,13 @@ def main():
             review = r.get("review") or {}
             pos = [h["tag"] for h in (r.get("positive") or [])]
             check("POST /api/agent 成功", True)
-            check("工具调用 3 次（概念合并 + 查词 + 校验）",
-                  stats.get("tool_calls") == 3, "实际 %s" % stats.get("tool_calls"))
-            check("模型调用 4 次（2 生成 + 2 自省）", stats.get("llm_calls") == 4,
+            check("工具调用 2 次（查词 + 校验）",
+                  stats.get("tool_calls") == 2, "实际 %s" % stats.get("tool_calls"))
+            check("模型调用 5 次（3 生成 + 2 自省；概念走本地抽取不占调用）",
+                  stats.get("llm_calls") == 5,
                   "实际 %s" % stats.get("llm_calls"))
-            check("轨迹里有 submit_concepts",
-                  any(t["tool"] == "submit_concepts" for t in trace))
+            check("轨迹里没有 submit_concepts（概念已本地化）",
+                  all(t["tool"] != "submit_concepts" for t in trace))
             check("轨迹里有 search_tags", any(t["tool"] == "search_tags" for t in trace))
             check("轨迹里有 validate_tags", any(t["tool"] == "validate_tags" for t in trace))
             check("查词结果来自真实词表", "thighhighs" in json.dumps(trace, ensure_ascii=False))
@@ -165,8 +166,12 @@ def main():
                   str(rv.get("final_score")))
             check("记录采用第 1 轮", rv.get("picked_round") == 1,
                   str(rv.get("picked_round")))
-            check("采用高分那轮的 tag", "orange_sky" in pos and "grey_hair" not in pos,
-                  str(pos))
+            check("采用高分那轮的 tag",
+                  "grey_hair" not in pos
+                  and "orange_sky" in [c.get("tag") for c in
+                                       (r.get("positive_candidates") or [])],
+                  "正向 %s / 候选 %s" % (pos, [c.get("tag") for c in
+                                                (r.get("positive_candidates") or [])]))
             check("负向也回到高分那轮", "blurry" not in neg, str(neg))
             check("低分轮仍保留在评审历史",
                   len(rounds) == 2 and rounds[1].get("score") == 70,

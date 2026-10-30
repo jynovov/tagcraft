@@ -29,7 +29,7 @@
         <div class="grid2">
           <div class="field">
             <label>模型名</label>
-            <input id="model" class="mono" placeholder="deepseek-chat">
+            <input id="model" class="mono" placeholder="deepseek-flash">
           </div>
           <div class="field">
             <label>温度（0.2 稳 / 0.9 活）</label>
@@ -42,10 +42,10 @@
         </div>
         <div class="field">
           <label>辅助模型名（可空，空 = 用主模型）</label>
-          <input id="auxModel" class="mono" placeholder="概念 / 计划 / 评审用，例如 deepseek-chat">
+          <input id="auxModel" class="mono" placeholder="计划 / 评审用，例如 deepseek-flash">
         </div>
         <div class="page-sub">
-          辅助模型只用于概念映射、查词计划和自省评审；最终生成仍用主模型。留空则全部用主模型。
+          辅助模型只用于查词计划和自省评审（概念核对是本地词表匹配，不调模型）；最终生成仍用主模型。留空则全部用主模型。
         </div>
         <div class="row">
           <button id="btnSave" class="primary">保存</button>
@@ -73,10 +73,10 @@
           <input id="plan" type="checkbox"> 规划展示（生成前先让模型列出画面要素与查词计划）
         </label>
         <div class="page-sub" style="margin-top:8px">
-          tag 模式始终做概念核对（没有开关）：第一轮请求里让模型顺带提交画面概念，
-          服务端逐条拿 get_tag / resolve_alias / search_tags 映射到词表，只允许使用「已确认」的 tag；
+          tag 模式始终做概念核对（没有开关）：进查词循环前直接用本地词表的中文索引
+          做最长匹配抽概念（不调模型、不联网），再逐条映射成词表 tag，只允许使用「已确认」的 tag；
           未确认的只能从候选里挑。确认不足 3 个时跳过注入，统计照常记录。
-          开了「规划展示」时概念与计划合并成一次调用，不会多花请求。
+          概念核对不占模型调用；开了「规划展示」也只会多一次计划请求。
           <br>Krea2 页不做词表校验，不受影响。
         </div>
         <div class="page-sub" style="margin-top:8px">

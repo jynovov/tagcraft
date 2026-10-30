@@ -205,15 +205,15 @@ def integration_checks(mock, app, base, api):
           bool(critic) and "black_thighhighs" in user_text(critic[0]),
           user_text(critic[0])[-260:] if critic else "")
 
-    print("== 联调：概念降级时，「计划预查」轨迹仍在概念之前")
+    print("== 联调：本地抽不到概念时，「计划预查」轨迹仍在概念之前")
     n0 = len(read_calls())
-    st, b = post(base, "/api/agent", {"text": text + "-order", "plan": True,
+    st, b = post(base, "/api/agent", {"text": "qqqzzz-planorder", "plan": True,
                                       "reflect": False,
-                                      "api": dict(api, model="mock-noconcept")})
+                                      "api": dict(api, model="mock-plan")})
     r = json.loads(b) if st == 200 else {}
     trace = r.get("trace") or []
     names = tool_names(trace)
-    check("概念降级时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
+    check("抽不到概念时生成照常完成", st == 200 and bool(r.get("positive")), b[:160])
     check("同时出现「计划预查」和「概念」两条轨迹",
           "计划预查" in names and "概念" in names, str(names[:6]))
     check("「计划预查」排在「概念」之前",

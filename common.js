@@ -173,7 +173,7 @@ function savePlanOn(on) {
   localStorage.setItem(LS_PLAN, on ? '1' : '0');
 }
 
-/* ---- 辅助模型：默认空（= 主模型）。概念/计划/评审这些辅助步骤用它 ---- */
+/* ---- 辅助模型：默认空（= 主模型）。计划/评审这些辅助步骤用它 ---- */
 function auxModelName() {
   const s = loadSettings();
   return String(s.auxModel || '').trim();

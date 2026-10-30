@@ -16,8 +16,8 @@ import webbrowser
 
 import lc_tools
 
-from dict_db import (QUALITY_TAGS, get_tag, get_tags, resolve_alias, search_tags,
-                     suggest_for, validate_tags)
+from dict_db import (QUALITY_TAGS, get_tag, get_tags, local_concepts, resolve_alias,
+                     search_tags, suggest_for, validate_tags)
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, SYSTEM_PROMPT, _extract_json, _post_chat, get_model, prefs_prompt_block
 
@@ -119,36 +119,8 @@ AGENT_TOOLS = [
 ]
 
 
-# 概念核对第一轮专用的伪工具：模型先把画面概念交上来，服务端本地映射后回填。
-# 只挂在第一轮请求里（下一轮就撤掉），不算一次独立的模型调用。
-SUBMIT_CONCEPTS_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "submit_concepts",
-        "description": "概念核对专用（只出现在第一轮）：提交画面里的短名词概念，"
-                       "服务端会用 33 万条词表核对并返回「已确认 / 未确认（含候选）」。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "concepts": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "画面概念短名词（2~6 字，最多 25 个，去重）",
-                },
-            },
-            "required": ["concepts"],
-        },
-    },
-}
-
-
-SUBMIT_CONCEPTS_HINT = """
-【概念核对·第一轮】这一轮请先调用 submit_concepts 工具（只此一轮）：
-把画面里可画的视觉概念写成 2~6 字短名词（最多 25 个，去重，中文优先），
-覆盖主体/外貌/服装/表情动作/场景/光线/镜头/风格，以及构图、留白、氛围、材质、媒介这类抽象项。
-服务端会逐条用 33 万条词表核对，并返回「已确认 / 未确认（含候选）」；
-拿到结果后再按正常流程查词，最后输出最终 JSON。
-"""
+# 概念抽取现在完全在本地做（词表中文名最长匹配，见 dict_db.local_concepts），
+# 不再需要 submit_concepts 伪工具 / 概念抽取提示词，也不再额外花一次模型调用。
 
 
 AGENT_EXTRA = """
@@ -246,50 +218,8 @@ PLAN_NATURAL_SYSTEM = """你是英文自然语言提示词（Krea 2 / Flux 类�
 """
 
 
-CONCEPT_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念抽取助手。用户会给你一段中文画面描述。
-
-请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
-{
-  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~6 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"]
-}
-
-注意：
-- 每条必须是**短名词（2~6 个字）**，禁止短语：不要「机能风外套」，要「机能风」「外套」。
-  长短语在词表里基本查不到，等于白抽；宁可拆成两个短名词。
-- 只抽概念（中文优先），不要写英文 tag，也不要在这里输出最终 tag 清单。
-- 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项：它们也是画面要素，
-  而且往往正是最终提示词最容易漏掉的东西。
-  例 1：「画面右侧大面积留白，题字在左上角」→ 抽出「留白」「题字」「构图」；
-  例 2：「宣纸质感的水墨画，江南白墙拱桥」→ 抽出「宣纸」「水墨」「白墙」「拱桥」「江南水乡」。
-- 抽象情绪、对白、前因后果不要抽；只抽画得出来的东西。
-"""
-
-
-CONCEPT_PLAN_SYSTEM = """你是 SDXL 动漫模型（Danbooru tag）提示词的概念抽取与画面规划助手。用户会给你一段中文画面描述。
-
-请只输出一个 JSON（不要解释、不要 Markdown 代码块）：
-{
-  "concepts": ["画面里真正可画的视觉概念，最多 25 个，每条 2~6 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑，去重"],
-  "elements": ["画面里真正可画的要素，每条 2~10 个字，按主体/外貌/服装/表情动作/场景/光线/镜头/风格挑"],
-  "queries": ["为了确认英文写法，打算去词表里查的中文或英文关键词，最多 6 条"]
-}
-
-注意：
-- 这个规划只用于展示，不会自动执行；不要输出 tag 本身，也不要输出最终 JSON 结果。
-- queries 要具体，指向描述里「这个英文怎么说才准」的要素。
-- concepts 每条必须是**短名词（2~6 个字）**，禁止短语：不要「机能风外套」，
-  要「机能风」「外套」。长短语在词表里基本查不到，等于白抽。
-- concepts 必须覆盖「构图 / 留白 / 氛围 / 材质 / 媒介」这类抽象项，它们的英文写法
-  往往最难猜、也最容易被漏掉。
-  例 1：「画面右下角留白很多」→ 抽出「留白」「构图」；
-  例 2：「宣纸质感的水墨画」→ 抽出「宣纸」「水墨」「材质」。
-- concepts 和 elements 可以是同一批内容的不同视角，但都要去重、去空。
-"""
-
-
 _PLAN_MAX_ELEMENTS = 12
 _PLAN_MAX_QUERIES = 10
-_CONCEPT_MAX = 25
 # 概念确认数不足这个数就不追加【概念核对】注入段（只记统计，避免过度约束模型）
 _CONCEPT_MIN_INJECT = 3
 
@@ -425,37 +355,6 @@ def _clean_plan(parsed):
     return {"elements": elements, "queries": queries}
 
 
-def _clean_concepts(parsed):
-    """把模型给的概念列表规整成去空、去重、最多 25 个的字符串列表。
-
-    宽容处理：字符串当单条、非列表当空；拿不到可用概念时返回 []。
-    """
-    if not isinstance(parsed, dict):
-        return []
-    raw = parsed.get("concepts")
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, list):
-        return []
-    out, seen = [], set()
-    for item in raw:
-        text = " ".join(str(item if item is not None else "").split())
-        text = text.strip("-·、,，;；")
-        if not text:
-            continue
-        # 概念是拿来查词的短词，太长的句子直接截断（避免把整段描述当概念）
-        if len(text) > 24:
-            text = text[:24]
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(text)
-        if len(out) >= _CONCEPT_MAX:
-            break
-    return out
-
-
 def plan_generate(cfg, text, natural=False, temperature=0.3, model=None):
     """生成一份展示用计划；任何失败都返回 (None, 原因)，绝不抛异常。
 
@@ -485,41 +384,6 @@ def plan_generate(cfg, text, natural=False, temperature=0.3, model=None):
         plan["queries"] = []
     return plan, ""
 
-
-def concept_generate(cfg, text, temperature=0.3, model=None, with_plan=False):
-    """让模型先抽画面概念（可选顺带做规划），任何失败都不抛异常。
-
-    返回 (concepts, plan, err)：
-      * concepts 是规整后的字符串列表，拿不到就是 []
-      * plan 只在 with_plan=True 时有值（没有就是 None）
-      * err 是给人看的一句失败原因，成功时为空字符串
-    只发一次请求；with_plan=True 时概念与计划共用这一次，不会多花一次。
-    """
-    system = CONCEPT_PLAN_SYSTEM if with_plan else CONCEPT_SYSTEM
-    label = "概念/计划" if with_plan else "概念"
-    payload = {
-        "model": (model if model is not None else (cfg.get("model") or "")).strip(),
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": text}],
-        "temperature": max(0.0, min(0.4, float(temperature))),
-        "stream": False,
-    }
-    try:
-        body = _post_chat(cfg, payload, retries=1)
-    except Exception as e:  # noqa: BLE001 - 概念抽取失败不能拖垮生成
-        return [], None, "%s调用失败：%s" % (label, e)
-    try:
-        content = body["choices"][0]["message"].get("content") or ""
-    except Exception:  # noqa: BLE001
-        return [], None, "%s调用返回格式异常" % label
-    parsed = _extract_json(content)
-    if not parsed:
-        return [], None, "%s没有返回可用的 JSON" % label
-    concepts = _clean_concepts(parsed)
-    plan = _clean_plan(parsed) if with_plan else None
-    if not concepts:
-        return [], plan, "%s没有返回可用概念" % label
-    return concepts, plan, ""
 
 
 # 颜色/数量/材质等修饰词：用来把「黑色过膝袜」这类候选还原成更通用的 tag。
@@ -838,32 +702,6 @@ def concept_injection_block(mapping):
     if len(confirmed) < _CONCEPT_MIN_INJECT:
         return ""
     return concepts_prompt_block(mapping)
-
-
-def concept_tool_result(mapping):
-    """把概念映射结果压成 submit_concepts 的 tool 结果（含候选，失败也降级）。"""
-    confirmed = (mapping or {}).get("confirmed") or []
-    unknown = (mapping or {}).get("unknown") or []
-    lines = ["概念核对结果：已确认 %d 个、未确认 %d 个。"
-             % (len(confirmed), len(unknown))]
-    if confirmed:
-        lines.append("已确认：" + "；".join(
-            "%s→%s" % (c.get("concept"), c.get("tag")) for c in confirmed[:25]))
-    if unknown:
-        parts = []
-        for u in unknown[:25]:
-            cands = "、".join(u.get("candidates") or [])
-            parts.append("%s（候选：%s）" % (u.get("concept"), cands) if cands
-                         else "%s（无候选）" % u.get("concept"))
-        lines.append("未确认：" + "；".join(parts))
-    if len(confirmed) >= _CONCEPT_MIN_INJECT:
-        lines.append("已追加【概念核对】规则：只能使用上面「已确认」里的 tag；"
-                     "未确认的概念只能从它列出的候选里挑一个，候选也没有就整条省略。"
-                     "禁止自造 tag。继续按正常流程查词并输出最终 JSON。")
-    else:
-        lines.append("确认不足 %d 个，已跳过注入。按原流程继续查词并输出最终 JSON。"
-                     % _CONCEPT_MIN_INJECT)
-    return "\n".join(lines)
 
 
 # 自省给的 missing 常带这些前缀（「没有体现…」「缺少…」），拆概念前先剥掉
@@ -1600,9 +1438,9 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
-    tag 模式始终做概念核对（没有开关）：不生成计划时，概念在第一轮请求里用
-    submit_concepts 伪工具提交（不额外调模型）；生成计划时与计划合并成一次调用。
-    aux_model 非空时，概念/计划/评审这些辅助步骤用它，生成仍用主模型。
+    tag 模式始终做概念核对（没有开关）：进查词循环前用本地词表索引抽概念
+    （dict_db.local_concepts，纯本地、不额外调模型），映射后确认 ≥3 个才注入。
+    aux_model 非空时，规划 / 评审这些辅助步骤用它，生成仍用主模型。
     """
     def say(msg, pct=None):
         if progress:
@@ -1670,37 +1508,24 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     say("读到中文描述（%d 字），开始分析画面要素" % len(text), 4)
 
     # 概念核对（tag 模式始终开启）/ 规划展示（默认关）：
-    #   · 只做概念核对：不单独调模型 —— 第一轮请求里带一个只此一轮的 submit_concepts
-    #     伪工具，模型提交概念后由服务端本地映射并回填（省一次调用）。
-    #   · 同时开规划展示：概念与计划本来就是同一批要素，合并成一次调用（用 aux 模型）。
-    # 失败只记轨迹，生成照常继续。
+    #   · 概念核对完全本地：进查词循环前用词表中文索引做最长匹配（dict_db.local_concepts），
+    #     再走 map_concepts 映射；不调模型、不占调用数，也不用等第一轮回填。
+    #   · 规划展示仍然要一次模型调用（开了才有，用 aux 模型）；计划预查照旧纯本地。
+    # 失败只记轨迹并降级，生成照常继续。
     plan_info = None
     concept_map = None
+    concept_injected = False   # 【概念核对】注入段真的追加了没有（决定自省池要不要收概念 tag）
     prefetch_tags = []          # 预查命中的 tag：进候选池，供自省复用
     concept_check = not natural          # tag 模式没有开关，一律做概念核对
-    strict_pending = concept_check and not plan   # 等模型在第一轮调用 submit_concepts
-    strict_submitted = False
     if concept_check:
         stats["concepts_confirmed"] = 0
         stats["concepts_unknown"] = 0
-    if plan or concept_check:
-        concepts, concept_err = [], ""
-        if plan and concept_check:
-            say("正在抽取画面概念并规划查词方向…", 5)
-            concepts, plan_info, concept_err = concept_generate(
-                cfg, text, temperature=temperature, model=aux, with_plan=True)
-            stats["llm_calls"] += 1
-        elif plan:
-            say("正在规划画面要素与查词方向…", 5)
-            plan_info, plan_err = plan_generate(cfg, text, natural=natural,
-                                               temperature=temperature, model=aux)
-            stats["llm_calls"] += 1
-            concept_err = plan_err
-        else:
-            # 概念不单独调模型：第一轮请求里用 submit_concepts 伪工具一并提交
-            say("正在准备概念核对：第一轮先让模型提交画面概念…", 5)
-
-        if plan and plan_info:
+    if plan:
+        say("正在规划画面要素与查词方向…" if not natural else "正在规划画面要素…", 5)
+        plan_info, plan_err = plan_generate(cfg, text, natural=natural,
+                                           temperature=temperature, model=aux)
+        stats["llm_calls"] += 1
+        if plan_info:
             say("计划就绪：%d 个画面要素、%d 个查词方向"
                 % (len(plan_info["elements"]), len(plan_info["queries"])), 5.5)
             # 计划预查：本地按 queries 查一遍词表，把结果提前给模型（不调模型、加了也不算调用）
@@ -1714,37 +1539,36 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                                   "summary": prefetch_trace_summary(detail)})
                     say("计划预查：%d 个查词方向已在本地词表查过（命中 %d）"
                         % (detail["queries"], detail["hit"]), 5.6)
-        elif plan and not plan_info:
-            # 合并调用失败 / 只拿到概念没拿到计划：计划降级，但不影响生成
+        else:
+            # 计划调用失败 / 没返回可用 JSON：计划降级，但不影响生成
             trace.append({"round": 0, "tool": "计划", "args": {},
                           "summary": "计划没生成出来（%s），继续按原流程生成"
-                                     % (concept_err or "模型没有返回可用计划")})
+                                     % (plan_err or "模型没有返回可用计划")})
             say("计划没生成出来，继续生成（不影响结果）")
 
-        if plan and concept_check:
-            # 概念与计划合并调用：映射后按「确认 ≥3 才注入」处理
-            if concepts:
-                mapping = map_concepts(concepts)
-                concept_map = mapping
-                stats["concepts_confirmed"] = len(mapping["confirmed"])
-                stats["concepts_unknown"] = len(mapping["unknown"])
-                block = concept_injection_block(mapping)
-                if block:
-                    system += block
-                    say("概念核对：已确认 %d 个、未确认 %d 个"
-                        % (stats["concepts_confirmed"], stats["concepts_unknown"]), 5.8)
-                else:
-                    trace.append({"round": 0, "tool": "概念", "args": {},
-                                  "summary": "概念确认不足 %d 个，已跳过注入，继续生成"
-                                             % _CONCEPT_MIN_INJECT})
-                    say("概念确认不足 %d 个，已跳过概念核对注入"
-                        % _CONCEPT_MIN_INJECT, 5.8)
+    if concept_check:
+        concepts = local_concepts(text)          # 纯本地抽取，不调模型、不查网络
+        if concepts:
+            mapping = map_concepts(concepts)
+            concept_map = mapping
+            stats["concepts_confirmed"] = len(mapping["confirmed"])
+            stats["concepts_unknown"] = len(mapping["unknown"])
+            block = concept_injection_block(mapping)
+            if block:
+                system += block
+                concept_injected = True
+                say("概念核对：已确认 %d 个、未确认 %d 个"
+                    % (stats["concepts_confirmed"], stats["concepts_unknown"]), 5.8)
             else:
-                # 降级：概念抽取没成功就跳过注入，流程照常
                 trace.append({"round": 0, "tool": "概念", "args": {},
-                              "summary": "概念抽取没成功（%s），跳过概念核对，继续生成"
-                                         % (concept_err or "没有拿到概念")})
-                say("概念抽取没成功，跳过概念核对（不影响结果）")
+                              "summary": "概念确认不足 %d 个，已跳过注入，继续生成"
+                                         % _CONCEPT_MIN_INJECT})
+                say("概念确认不足 %d 个，已跳过概念核对注入" % _CONCEPT_MIN_INJECT, 5.8)
+        else:
+            # 索引没建好或整段描述一个词条都没命中：不注入、不报错，只留一条轨迹
+            trace.append({"round": 0, "tool": "概念", "args": {},
+                          "summary": "本地概念抽取：0 个"})
+            say("本地概念抽取：0 个，跳过概念核对（不影响结果）")
 
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": text}]
@@ -1753,16 +1577,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         payload = {"model": model, "messages": messages,
                    "temperature": float(temperature), "stream": False}
         if tools_ok:
-            payload_tools = list(tool_payload(natural))
-            if rnd == 1 and strict_pending and not strict_submitted:
-                # 只挂第一轮：模型可以并行调它 + 查词工具；下一轮就撤掉
-                payload_tools.append(SUBMIT_CONCEPTS_TOOL)
-                first_msgs = list(messages)
-                first_msgs[0] = dict(first_msgs[0])
-                first_msgs[0]["content"] = ((first_msgs[0].get("content") or "")
-                                            + SUBMIT_CONCEPTS_HINT)
-                payload["messages"] = first_msgs
-            payload["tools"] = payload_tools
+            payload["tools"] = list(tool_payload(natural))
             payload["tool_choice"] = "auto"
         call_no[0] += 1
         say("第 %d/%d 轮：正在请求模型…" % (rnd, max_r), gen_pct(0.05))
@@ -1831,25 +1646,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                 fargs = json.loads(fn.get("arguments") or "{}")
             except Exception:
                 fargs = {}
-            out, brief = ("", "")
-            if fname == "submit_concepts":
-                # 概念核对伪工具：本地映射，不调模型；确认 ≥3 个才追加注入段。
-                already = strict_submitted
-                mapping = map_concepts(_clean_concepts(fargs))
-                concept_map = mapping
-                stats["concepts_confirmed"] = len(mapping["confirmed"])
-                stats["concepts_unknown"] = len(mapping["unknown"])
-                strict_submitted = True
-                block = concept_injection_block(mapping)
-                if block and not already:
-                    messages[0]["content"] = (messages[0].get("content") or "") + block
-                out = concept_tool_result(mapping)
-                brief = "概念核对：已确认 %d 个、未确认 %d 个%s" % (
-                    stats["concepts_confirmed"], stats["concepts_unknown"],
-                    "（已注入）" if block
-                    else "（确认不足 %d 个，已跳过注入）" % _CONCEPT_MIN_INJECT)
-            else:
-                out, brief = run_tool(fname, fargs)
+            out, brief = run_tool(fname, fargs)
             stats["tool_calls"] += 1
             trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
             messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
@@ -1857,13 +1654,6 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             # 一轮里可能有好几个工具调用，逐个推进百分比
             say("执行工具 %d/%d（%s）：%s" % (k + 1, len(calls), fname, brief),
                 gen_pct(0.5 + 0.45 * (k + 1) / max(1, len(calls))))
-
-    # 模型始终没调用 submit_concepts（直接查词 / 直接输出）：按兼容模式处理，
-    # 不做概念注入，也不报错 —— 只是把原因记进轨迹。
-    if concept_check and not plan and not strict_submitted:
-        trace.append({"round": 0, "tool": "概念", "args": {},
-                      "summary": "模型没有调用 submit_concepts，跳过概念核对，继续生成"})
-        say("模型没有提交概念，跳过概念核对（不影响结果）")
 
     # 轮数用完了还没拿到 JSON：强制它收尾
     if not parsed:
@@ -1955,9 +1745,11 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         say("进入自省环节：让审核员给这套 tag 打分", 66)
         # 可新增池：概念核对已确认的 tag + 计划预查命中的 tag + 相近候选
         # （三者同级；纯本地，不调模型）
+        # 概念只在「确认 ≥3 个、真的注入了」时才进池：本地抽取有时只命中一两个词，
+        # 这时如果还拿它框住自省，模型想补的 tag 会全被挤进候选，反而更差。
         pool_tags = []
         pool_seed = []
-        if concept_map:
+        if concept_map and concept_injected:
             pool_seed.extend(c.get("tag") for c in (concept_map.get("confirmed") or []))
         pool_seed.extend(prefetch_tags)
         if pool_seed:

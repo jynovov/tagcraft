@@ -233,6 +233,7 @@ def import_csv(path, source_label, replace=True):
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("VACUUM")
     log("词表导入完成：%d 条（跳过 %d 行，来源 %s）" % (len(rows), skipped, source_label))
+    invalidate_cn_index()   # 词表换了，中文索引下次按新数据重建
     return len(rows)
 
 
@@ -312,6 +313,7 @@ def import_sqlite(path, source_label, replace=True):
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("VACUUM")
     log("sqlite 词表导入完成：%d 条（%s）" % (len(rows), source_label))
+    invalidate_cn_index()   # 词表换了，中文索引下次按新数据重建
     return len(rows)
 
 
@@ -342,6 +344,7 @@ def merge_aliases(path, label=""):
         c.commit()
         c.execute("PRAGMA synchronous=NORMAL")
     log("已从 %s 合并 %d 条别名" % (label or path, n))
+    invalidate_cn_index()   # 别名/中文名变了，中文索引下次重建
     return n
 
 
@@ -533,8 +536,127 @@ def validate_tags(tags):
     return valid, unknown
 
 
+# ---------- 本地概念抽取：中文词条索引（cn -> 正式 tag） ----------
+# 概念核对曾经要额外调一次模型来抽概念；改成纯本地后，直接拿用户描述在词表里
+# 做「中文名最长匹配」。索引只在第一次用到时建一次，进程内缓存。
+# 排除画师(1) / 作品(3) / 角色(4)：概念核对只认画面要素，不认人名/作品名。
+_CN_INDEX_EXCLUDED = (1, 3, 4)
+
+
+# 概念切段：中文/英文标点、空白都当分隔符（片段里的英文不会命中中文索引，无害）
+_CONCEPT_SPLIT_RE = re.compile(
+    r"[\s\u3000]+|[，。、；：！？…—·「」『』“”‘’（）《》〈〉【】〔〕,.;:!?()\[\]{}<>\"'"
+    r"|/\\~`@#$%^&*+=_-]+")
+
+
+_CONCEPT_MIN_LEN = 2      # 最短词条：1 个字的概念几乎全是噪声
+_CONCEPT_MAX_LEN = 8      # 最长词条：再长基本是短语，词表里不会有
+_CONCEPT_LIMIT = 25       # 单次最多记这么多概念（和原来的 submit_concepts 上限一致）
+
+
+def load_cn_rows():
+    """中文索引的原始行 (name, cn, post_count)；词表没建好时抛异常，由上层兜底。"""
+    sql = ("SELECT name, cn, post_count FROM tags "
+           "WHERE cn IS NOT NULL AND cn != '' AND category NOT IN (%s)"
+           % ",".join("?" * len(_CN_INDEX_EXCLUDED)))
+    return db().execute(sql, _CN_INDEX_EXCLUDED).fetchall()
+
+
+def build_cn_index(rows):
+    """把 (name, cn, post_count) 行压成 {中文名: 正式 tag}。
+
+    同一个中文名可能对应多条 tag（例如「镜头」既有人像镜头也有 lens），
+    留热度（post_count）最高的那条，保证抽出来的概念更常用。
+    """
+    best = {}
+    for name, cn, post_count in rows or []:
+        key = (cn or "").strip()
+        tag = (name or "").strip()
+        if not key or not tag:
+            continue
+        try:
+            hot = int(post_count or 0)
+        except (TypeError, ValueError):
+            hot = 0
+        old = best.get(key)
+        if old is None or hot > old[1]:
+            best[key] = (tag, hot)
+    return {key: pair[0] for key, pair in best.items()}
+
+
+def cn_index():
+    """懒加载中文索引：线程安全、进程内缓存；构建失败返回空字典（不影响主流程）。"""
+    global _cn_index_cache
+    if _cn_index_cache is None:
+        with _cn_index_lock:
+            if _cn_index_cache is None:
+                try:
+                    _cn_index_cache = build_cn_index(load_cn_rows())
+                except Exception as e:  # noqa: BLE001 - 索引坏了也不能拖垮生成
+                    log("中文索引构建失败，本地概念抽取降级为空：", e)
+                    _cn_index_cache = {}
+    return _cn_index_cache
+
+
+def invalidate_cn_index():
+    """词表导入 / 合并后调用：下次用的时候按新词表重建。"""
+    global _cn_index_cache
+    with _cn_index_lock:
+        _cn_index_cache = None
+
+
+def split_concept_text(text):
+    """按中英文标点与空白切段，丢掉空片段。"""
+    return [seg for seg in _CONCEPT_SPLIT_RE.split(str(text or "")) if seg.strip()]
+
+
+def local_concepts(text, limit=_CONCEPT_LIMIT):
+    """本地概念抽取：中文索引最长匹配（2~8 字），不调模型、不查网络。
+
+    逐段扫描，每个位置先试最长的词条，命中就记下概念并跳过整条词，
+    没命中就往后挪一个字。去重、保序，最多 limit 个。
+    """
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = _CONCEPT_LIMIT
+    if limit <= 0:
+        return []
+    index = cn_index()
+    if not index:
+        return []
+
+    out, seen = [], set()
+    for seg in split_concept_text(text):
+        i, n = 0, len(seg)
+        while i < n:
+            hit = ""
+            for j in range(min(n, i + _CONCEPT_MAX_LEN), i + _CONCEPT_MIN_LEN - 1, -1):
+                piece = seg[i:j]
+                if piece in index:
+                    hit = piece
+                    break
+            if not hit:
+                i += 1
+                continue
+            key = hit.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(hit)
+                if len(out) >= limit:
+                    return out
+            i += len(hit)
+    return out
+
+
 _db_lock = threading.Lock()
 
 
 _conn = None
+
+
+_cn_index_lock = threading.Lock()
+
+
+_cn_index_cache = None
 

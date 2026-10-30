@@ -24,11 +24,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from common import DATA_DIR, ROOT, load_config, log
 
-from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_count, dict_meta, download_dict, import_csv, search_tags, suggest_for, validate_tags
+from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_count, dict_meta, download_dict, import_csv, local_concepts, search_tags, suggest_for, validate_tags
 
 from llm_client import DEFAULT_MODEL, KREA_SYSTEM_PROMPT, MAX_PREFS, MODELS, SYSTEM_PROMPT, call_llm, get_model, is_known_model, ping_llm
 
-from agent_core import _CONCEPT_MIN_INJECT, _clean_prompt, agent_generate, concept_generate, concept_injection_block, concepts_prompt_block, map_concepts, natural_fields, negative_space_conflict_trace, plan_generate, plan_prefetch_detail, prefetch_trace_summary, prompt_style_warnings, reorder_hits, resolve_negative_space_conflict, self_refine, self_refine_natural, tool_get_tag, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
+from agent_core import _CONCEPT_MIN_INJECT, _clean_prompt, agent_generate, concept_injection_block, concepts_prompt_block, map_concepts, natural_fields, negative_space_conflict_trace, plan_generate, plan_prefetch_detail, prefetch_trace_summary, prompt_style_warnings, reorder_hits, resolve_negative_space_conflict, self_refine, self_refine_natural, tool_get_tag, tool_search_tags, tool_suggest_tags, tool_validate_tags, word_count
 
 from comfy_client import comfy_inspect, comfy_ping, comfy_send
 
@@ -181,16 +181,16 @@ def _reflect_rounds_of(body, natural):
         return 4 if natural else 2
 
 
-def _single_concept_parts(concepts, err):
-    """单次生成的概念核对：映射 + 注入段 + 失败轨迹（纯本地，不调模型）。
+def _single_concept_parts(concepts):
+    """单次生成的概念核对：概念已经由本地词表索引抽好，这里只做映射 + 注入段。
 
-    确认数不足 3 个时不注入（和 Agent 模式口径一致），只记统计与轨迹。
+    纯本地、不调模型；确认数不足 3 个时不注入（和 Agent 模式口径一致），
+    只记统计与轨迹。抽不到概念时返回 0/0 和一条说明，绝不报错。
     """
     if not concepts:
         return ({"concepts_confirmed": 0, "concepts_unknown": 0}, "",
                 [{"round": 0, "tool": "概念", "args": {},
-                  "summary": "概念抽取没成功（%s），跳过概念核对，继续生成"
-                             % (err or "没有拿到概念")}])
+                  "summary": "本地概念抽取：0 个"}])
     mapping = map_concepts(concepts)
     stats = {"concepts_confirmed": len(mapping["confirmed"]),
              "concepts_unknown": len(mapping["unknown"])}
@@ -415,34 +415,23 @@ class Handler(BaseHTTPRequestHandler):
                     hit["cached"] = True
                     log("命中缓存：%s…" % text[:16])
                     return self._send(200, hit)
-            # 概念核对（tag 模式始终开启）/ 规划展示：单次生成放在真正生成之前。
-            # 单次请求没法像 Agent 那样再回填一次 submit_concepts 工具结果，
-            # 所以这里保留单独的概念调用（计划也开着时两件事合并成一次）；
+            # 概念核对（tag 模式始终开启）/ 规划展示：单次生成也统一用本地概念抽取，
+            # 不再为概念单独调一次模型（计划展示仍然要一次计划调用）。
             # 失败只记轨迹、不中断。
             plan_info, plan_trace = None, []
             prefetch_trace = []
             conflict_trace = []
             concept_trace, concept_stats, concept_block = [], {}, ""
-            if plan_flag and not natural:
-                concepts, plan_info, concept_err = concept_generate(
-                    cfg, text, temperature=temperature, model=aux, with_plan=True)
-                if not plan_info:
-                    plan_trace.append({"round": 0, "tool": "计划", "args": {},
-                                       "summary": "计划没生成出来（%s），继续生成"
-                                                  % (concept_err or "模型没有返回可用计划")})
-                concept_stats, concept_block, concept_trace = _single_concept_parts(
-                    concepts, concept_err)
-            elif plan_flag:
+            if plan_flag:
                 plan_info, plan_err = plan_generate(
-                    cfg, text, natural=True, temperature=temperature, model=aux)
+                    cfg, text, natural=natural, temperature=temperature, model=aux)
                 if not plan_info:
                     plan_trace.append({"round": 0, "tool": "计划", "args": {},
                                        "summary": "计划没生成出来（%s），继续生成" % plan_err})
-            else:
-                concepts, _, concept_err = concept_generate(
-                    cfg, text, temperature=temperature, model=aux)
+            if not natural:
+                # 概念抽取纯本地（词表中文索引最长匹配），和 Agent 模式同一套口径
                 concept_stats, concept_block, concept_trace = _single_concept_parts(
-                    concepts, concept_err)
+                    local_concepts(text))
             # 计划预查：本地查词表，把结果拼进注入段（不调模型、加了也不算调用）。
             # Krea2 不做（沿用「计划只展示」）；轨迹里记一条，前端照常渲染。
             if plan_info and not natural:
@@ -522,10 +511,11 @@ class Handler(BaseHTTPRequestHandler):
             if trace_extra:
                 res["trace"] = trace_extra
             if plan_flag or concept_stats:
-                if isinstance(res.get("stats"), dict):
+                # 生成本身 1 次；开了计划展示再 +1（概念核对纯本地，不算调用）
+                if not isinstance(res.get("stats"), dict):
+                    res["stats"] = {"llm_calls": 1, "tool_calls": 0}
+                if plan_flag:
                     res["stats"]["llm_calls"] = res["stats"].get("llm_calls", 1) + 1
-                else:
-                    res["stats"] = {"llm_calls": 2, "tool_calls": 0}
                 if concept_stats:
                     res["stats"].update(concept_stats)
             if ckey and not res.get("error"):

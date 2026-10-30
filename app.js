@@ -635,7 +635,7 @@ async function generate() {
     system_prompt: localStorage.getItem(LS_PROMPT) || '',
     prefs: prefsTagsForRequest(),   // 偏好 tag（最多 20 个）；没开 / 没生效的那套时是空数组
     plan: planOn(),                 // 规划展示：关着时后端连那次模型都不调
-    aux_model: auxModelName(),      // 辅助模型（概念/计划/评审）；空 = 主模型
+    aux_model: auxModelName(),      // 辅助模型（计划/评审）；空 = 主模型
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;

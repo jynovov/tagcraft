@@ -40,21 +40,6 @@ def _is_plan(msgs):
     return False
 
 
-def _is_concept(msgs):
-    """概念抽取请求：系统提示词里带「概念抽取」这个专用标记。
-
-    注意不能用「概念」两个字判断：最终生成请求的系统提示词里也会追加
-    【概念核对】段，带「概念」但绝不是抽取请求。
-    """
-    for m in msgs or []:
-        if m.get("role") == "system" and "概念抽取" in (m.get("content") or ""):
-            return True
-    return False
-
-
-CONCEPT_SCRIPT = ["校服", "逆光", "过膝袜", "孤独感", "量子猫娘"]
-
-
 def _is_natural(msgs):
     """Krea 2 模式：系统提示词里会出现「自然语言提示词」或「Krea 2」。"""
     for m in msgs or []:
@@ -160,43 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             if _is_natural(msgs):
                 # Krea 2 没有查词工具：计划只给要素，不给查词方向
                 out.pop("queries", None)
-            # 严格查词与规划合并成一次调用时，同一个 JSON 里还要带 concepts。
-            # 模型名带 noconcept 时故意只给计划、不给概念：用来验证「概念降级」的轨迹顺序。
-            if _is_concept(msgs) and "noconcept" not in model.lower():
-                out["concepts"] = CONCEPT_SCRIPT
             return reply(json.dumps(out, ensure_ascii=False))
-
-        # ---- 严格查词：概念抽取（单独调用或与规划合并） ----
-        if _is_concept(msgs):
-            if "badconcept" in model.lower():
-                # 返回非 JSON：只降级，生成不能中断
-                return reply("我想了想画面里的概念，但这次不打算给 JSON。")
-            if "concept-error" in model.lower():
-                return self._json({"error": {"message": "concept endpoint unavailable"}}, 400)
-            return reply(json.dumps({"concepts": CONCEPT_SCRIPT}, ensure_ascii=False))
-
-        # ---- 概念核对伪工具（tag 模式第一轮）：提交概念 + 并行查词 ----
-        # 服务端会在第一轮请求里挂 submit_concepts；这里模拟模型并行调用它和查词工具，
-        # 这样严格链路的生成只需要 2 次模型请求（合并前是「概念单独 1 次 + 3 轮」）。
-        tool_names = {(t.get("function") or {}).get("name")
-                      for t in (body.get("tools") or [])}
-        tool_msgs = [m for m in msgs if m.get("role") == "tool"]
-        if "submit_concepts" in tool_names and not tool_msgs:
-            if "badconcept" not in model.lower():
-                # fewconcept：只交 1 个概念（已确认不足 3 个 → 服务端跳过注入）
-                concepts = ["校服"] if "fewconcept" in model.lower() else CONCEPT_SCRIPT
-                return reply("", [
-                    {"id": "call_sc", "type": "function", "function": {
-                        "name": "submit_concepts",
-                        "arguments": json.dumps({"concepts": concepts}, ensure_ascii=False)}},
-                    {"id": "call_1", "type": "function", "function": {
-                        "name": "search_tags",
-                        "arguments": json.dumps({"query": "过膝袜"}, ensure_ascii=False)}},
-                    {"id": "call_2", "type": "function", "function": {
-                        "name": "validate_tags",
-                        "arguments": json.dumps({"tags": ["thighhighs", "zzz_fake_tag_zzz", "1girl"]},
-                                                ensure_ascii=False)}},
-                ])
 
         if "flaky" in model:
             left = FLAKY.get(model, 2)

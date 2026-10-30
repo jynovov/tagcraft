@@ -4,7 +4,7 @@
 概念确认率测试：不需要 API Key，也不会花钱。
 
 覆盖：
-    * 概念抽取提示词：要求短名词（2~6 字）、禁止短语，并给出「机能风外套」的拆分示例
+    * 概念抽取已本地化：模型侧的抽取提示词 / submit_concepts 伪工具 / 独立调用已清理
     * 包含式匹配：候选中文名包含概念 / 概念包含候选中文名，且是通用分类才算确认；
       画师 / 作品 / 角色分类排除，映射前仍要过 get_tag
     * 长概念切分：≥5 字的概念先按已知词条做最长匹配（最多 3 段），再逐段映射
@@ -45,22 +45,16 @@ def confirmed_map(concepts):
             {u["concept"]: u["candidates"] for u in mapping["unknown"]})
 
 
-def prompt_checks():
-    print("== 概念抽取提示词：短名词（2~6 字）、禁止短语")
-    for label, prompt in (("概念抽取", agent_core.CONCEPT_SYSTEM),
-                          ("概念+规划", agent_core.CONCEPT_PLAN_SYSTEM)):
-        concepts_line = [ln for ln in prompt.splitlines() if '"concepts"' in ln]
-        check("%s 的 concepts 要求 2~6 字" % label,
-              bool(concepts_line) and "2~6" in concepts_line[0],
-              str(concepts_line)[:120])
-        check("%s 不再要求 2~10 字" % label, "2~10 个字，按主体" not in " ".join(concepts_line))
-        check("%s 写明「禁止短语」" % label, "禁止短语" in prompt)
-        check("%s 给出「机能风外套」拆分示例" % label,
-              "机能风外套" in prompt and "机能风" in prompt and "外套" in prompt)
-        check("%s 保留抽象项覆盖（构图/留白/氛围/材质/媒介）" % label,
-              all(k in prompt for k in ("构图", "留白", "氛围", "材质", "媒介")))
-        check("%s 保留两个例子" % label,
-              prompt.count("例 1") >= 1 and prompt.count("例 2") >= 1)
+def cleanup_checks():
+    print("== 概念抽取已本地化：模型侧提示词 / 伪工具 / 独立调用都已清理")
+    for name in ("CONCEPT_SYSTEM", "CONCEPT_PLAN_SYSTEM", "SUBMIT_CONCEPTS_TOOL",
+                 "SUBMIT_CONCEPTS_HINT", "concept_generate", "concept_tool_result",
+                 "_clean_concepts"):
+        check("%s 已删除" % name, not hasattr(agent_core, name))
+    check("概念映射入口 map_concepts 还在", callable(getattr(agent_core, "map_concepts", None)))
+    check("概念抽取入口换成 dict_db.local_concepts",
+          callable(getattr(agent_core, "local_concepts", None)))
+    check("概念注入段入口还在", callable(getattr(agent_core, "concept_injection_block", None)))
 
 
 def containment_checks():
@@ -136,7 +130,7 @@ def critic_checks():
 
 
 def main():
-    prompt_checks()
+    cleanup_checks()
     containment_checks()
     split_checks()
     critic_checks()
