@@ -64,16 +64,13 @@ SYSTEM_PROMPT = """你是 SDXL 动漫模型（NoobAI-XL 系，本机使用 chenk
    只挑选最有画面感的一个瞬间来画。
 4. 必须包含画面基本要素：人数与构图（1girl / 2girls / solo / upper_body / full_body）、
    主体外貌、动作表情、服装、场景、光照、镜头视角、风格。
-5. 质量词只能从这些里选：masterpiece, best_quality, amazing_quality, very_aesthetic, absurdres, highres
-   （不确定就先不写质量词，交给程序处理）。
-6. 总共输出 25-45 个正向 tag，按重要性从高到低排序：
-   质量/风格 → 角色与作品 → 人数构图 → 外貌 → 表情动作 → 服装 → 场景 → 光照 → 镜头。
-7. 负向 tag 6-14 个，只用真实存在的 tag，如 worst_quality, low_quality, blurry, bad_anatomy,
-   extra_digits, jpeg_artifacts, watermark, signature。
-8. 不确定的 tag 宁可不写。绝不编造。
+5. 不要写质量词（masterpiece / best_quality / highres 这类由程序统一加在最前面）。
+6. 总共输出 25-45 个正向 tag（不含质量词），按重要性从高到低排序：
+   角色与作品 → 人数构图 → 外貌 → 表情动作 → 服装 → 场景 → 光照 → 镜头。
+7. 不确定的 tag 宁可不写。绝不编造。负向提示词由程序统一处理，你不要输出 negative。
 
 只输出一个 JSON 对象，不要任何解释、不要 Markdown 代码块：
-{"positive": ["tag1", "tag2"], "negative": ["tag1"], "notes": "一句话说明你做了什么取舍"}
+{"positive": ["tag1", "tag2"], "notes": "一句话说明你做了什么取舍"}
 """
 
 
@@ -97,35 +94,6 @@ KREA_SYSTEM_PROMPT = """你是英文图像提示词（prompt）工程师，服�
 
 
 TRANSIENT_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
-
-MAX_PREFS = 20   # 一次最多带 20 个偏好 tag（和前端保持一致）
-
-
-def prefs_prompt_block(prefs):
-    """把偏好 tag 拼成 system prompt 末尾的一段。
-
-    只给 tag 模式用：Krea 2 写成自然语言句子，偏好 tag 会和「别堆 tag」的规则打架，
-    所以调用方在 natural 模式下一律不要传 prefs。
-    """
-    tags = []
-    seen = set()
-    for raw in (prefs or []):
-        t = " ".join(str(raw if raw is not None else "").split())
-        if not t:
-            continue
-        key = t.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        tags.append(t)
-        if len(tags) >= MAX_PREFS:
-            break
-    if not tags:
-        return ""
-    return ("\n【用户偏好】这位用户常用的 tag：%s。\n"
-            "画面合适时可以带上它们；和用户这次的描述冲突时一律以描述为准，"
-            "用不上就不写（可忽略）。\n" % ", ".join(tags))
-
 
 def _friendly_api_error(code, detail):
     """把接口返回的错误 JSON 压成一句人话（顺便给出中文提示）。"""
@@ -215,7 +183,7 @@ def ping_llm(cfg):
 
 
 def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
-             prompt_model=DEFAULT_MODEL, system_prompt="", prefs=None,
+             prompt_model=DEFAULT_MODEL, system_prompt="",
              concept_block=""):
     model = (cfg.get("model") or "").strip()
     prof = get_model(prompt_model)
@@ -230,9 +198,8 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
     if natural:
         system += "\n本次英文提示词长度：60~120 个英文单词。\n"
     else:
-        system += prefs_prompt_block(prefs)   # 偏好只追加在 tag 模式，且在最后
         if concept_block:
-            system += concept_block           # 概念核对（tag 模式始终开启）追加在偏好之后
+            system += concept_block           # 概念核对（tag 模式始终开启）
 
     body = _post_chat(cfg, {
         "model": model,

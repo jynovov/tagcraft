@@ -44,9 +44,6 @@
           <label>辅助模型名（可空，空 = 用主模型）</label>
           <input id="auxModel" class="mono" placeholder="计划 / 评审用，例如 deepseek-flash">
         </div>
-        <div class="page-sub">
-          辅助模型只用于查词计划和自省评审（概念核对是本地词表匹配，不调模型）；最终生成仍用主模型。留空则全部用主模型。
-        </div>
         <div class="row">
           <button id="btnSave" class="primary">保存</button>
           <button id="btnTest">测试连接</button>
@@ -55,59 +52,20 @@
       </div>
 
       <div class="card">
-        <div class="card-title">智能体（Agent 模式）</div>
+        <div class="card-title">智能体</div>
         <div class="grid2">
           <div class="field">
             <label>工具调用最大轮数</label>
             <input id="agentRounds" type="number" min="1" max="12" value="6">
           </div>
           <div class="field">
-            <label>自省轮数（tag 默认 2 / Krea 默认 4，0 = 关闭）</label>
+            <label>自省轮数（tag 最多修几轮 / Krea 评审几轮，0 = 关闭）</label>
             <input id="reflectRounds" type="number" min="0" max="4" value="2">
           </div>
         </div>
         <label class="inline check" style="margin-top:12px">
-          <input id="reflect" type="checkbox" checked> 生成后自动自省并按需重写（tag 模式）
+          <input id="plan" type="checkbox"> 规划展示
         </label>
-        <label class="inline check" style="margin-top:12px">
-          <input id="plan" type="checkbox"> 规划展示（生成前先让模型列出画面要素与查词计划）
-        </label>
-        <div class="page-sub" style="margin-top:8px">
-          tag 模式始终做概念核对（没有开关）：进查词循环前直接用本地词表的中文索引
-          做最长匹配抽概念（不调模型、不联网），再逐条映射成词表 tag，只允许使用「已确认」的 tag；
-          未确认的只能从候选里挑。确认不足 3 个时跳过注入，统计照常记录。
-          概念核对不占模型调用；开了「规划展示」也只会多一次计划请求。
-          <br>Krea2 页不做词表校验，不受影响。
-        </div>
-        <div class="page-sub" style="margin-top:8px">
-          开启后会在生成之前（Agent 模式下是查词循环之前）多调一次模型，产出一份
-          「画面要素 + 查词方向」计划，显示在结果区轨迹的最上方，可折叠。
-          计划只做展示、不会自动执行，查词仍由模型自己决定；关掉时完全不发这次请求。
-          <br>生成页勾选「Agent 模式」后生效：模型自己决定调用词表工具（search_tags / get_tag /
-          validate_tags / suggest_tags）查证写法，最多跑 N 轮；随后由审核环节打分（0-100）
-          并输出修正后的 tag。轮数越多越稳，但更慢也更费 token。
-          <br>Krea2 页不带任何工具：描述直接写成英文提示词，再做自省评审；它有自己的「自省」开关，
-          轮数默认 4（早停规则照常生效）。
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-title">
-          偏好
-          <span class="spacer"></span>
-          <a class="page-sub" href="/preferences.html">管理偏好 →</a>
-        </div>
-        <label class="inline check" style="margin-top:0">
-          <input id="prefsOn" type="checkbox"> 生成时带上当前偏好的 tag
-        </label>
-        <div class="field" style="margin-top:12px">
-          <label>生效的那一套</label>
-          <select id="prefsActive"></select>
-        </div>
-        <div id="prefsHint" class="page-sub">
-          只对 tag 模式（NoobAI 系）生效：这套 tag 会追加到系统提示词末尾，并写进生成缓存 key；
-          Krea 2 页不追加。
-        </div>
       </div>
 
       <div class="card">
@@ -119,7 +77,6 @@
         <textarea id="systemPrompt" rows="12" class="mono"></textarea>
         <div class="row">
           <button id="btnSavePrompt" class="primary">保存提示词</button>
-          <span class="page-sub">改完随生成请求发给模型；清空则用内置模板</span>
         </div>
       </div>
 
@@ -132,7 +89,6 @@
         <textarea id="systemPromptKrea" rows="12" class="mono"></textarea>
         <div class="row">
           <button id="btnSavePromptKrea" class="primary">保存提示词</button>
-          <span class="page-sub">只对 Krea2 页生效；要求输出英文自然语言，不写 tag</span>
         </div>
       </div>
 

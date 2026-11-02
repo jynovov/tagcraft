@@ -121,6 +121,9 @@ render();
 const saved1 = JSON.parse(localStorage.getItem('tagcraft.cur'));
 chk('描述写进唯一一份', saved1.text === '黄昏海边女生校服过膝袜');
 chk('质量词写进唯一一份', saved1.quality.length === 1 && saved1.quality[0].tag === 'masterpiece');
+applyConstants({ quality_tags: ['__x_quality__'], tag_cn: { '__x_quality__': '测试词' } });
+chk('服务端常量能覆盖质量词集合', isQuality({ tag: '__x_quality__' }) === true);
+chk('服务端常量里的中文名可用', APP_CONST.tag_cn['__x_quality__'] === '测试词');
 chk('正向 tag 连权重一起写',
     saved1.positive[0].tag === 'thighhighs' && saved1.positive[0].weight === 1.3);
 chk('负向 / 未识别写进唯一一份',

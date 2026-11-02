@@ -120,7 +120,8 @@ def critic_checks():
     check("写明只有 >45 或 <15 才提示数量问题", ">45 或 <15 才提示数量问题" in critic)
     check("提醒 35 个是正常值",
           "35 个是正常值" in critic and "超上限" in critic)
-    check("负向数量仍写 4~12 个", "4~12" in critic)
+    check("不再要求模型给负向（评审提示已去掉负向数量）",
+          "4~12" not in critic and chr(34) + "negative" + chr(34) not in critic)
     check("仍保留【评分锚点】（没被数量说明挤掉）", "【评分锚点】" in critic)
     krea = agent_core.KREA_CRITIC_SYSTEM
     check("Krea 评审不涉及 tag 数量口径",

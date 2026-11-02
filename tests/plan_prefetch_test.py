@@ -81,6 +81,9 @@ def get(base, path, timeout=30):
 
 
 def post(base, path, body, timeout=90):
+    if path == "/api/agent":
+        body.setdefault("fallback", False)
+        body.setdefault("compress", False)
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:

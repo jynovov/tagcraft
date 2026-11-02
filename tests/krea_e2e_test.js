@@ -120,9 +120,14 @@ function waitUp(port, ms = 25000) {
     el('inputText').value = '黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头';
     el('useAgent').checked = true;
 
-    // Krea2 已改成单次请求（不带工具），generate() 本身就是一次 fetch
+    // Krea2 现在也走后台任务：generate() 提交后要等任务跑完
     await vm.runInContext('generate()', ctx);
-    await sleep(300);
+    for (let i = 0; i < 300; i++) {
+      await sleep(150);
+      const done = vm.runInContext('!!(state.progress && state.progress.done)', ctx);
+      if (done) break;
+    }
+    await sleep(400);
     const out = JSON.parse(vm.runInContext(
       'JSON.stringify({prompt: state.prompt, noNeg: state.negative === undefined, ' +
       'words: state.stats && state.stats.words, ' +

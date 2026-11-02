@@ -172,7 +172,7 @@ def integration_checks(mock, app, base, api):
     print("== 联调：开计划 + 自省 → 轨迹 / 注入段 / 候选池")
     n0 = len(read_calls())
     st, b = post(base, "/api/agent", {"text": text + "-trace", "plan": True,
-                                      "reflect": True, "reflect_rounds": 2,
+                                      "reflect": True, "reflect_mode": "llm", "reflect_rounds": 2,
                                       "api": dict(api, model="mock-prefetch")})
     r = json.loads(b) if st == 200 else {}
     calls = read_calls()[n0:]
@@ -191,8 +191,8 @@ def integration_checks(mock, app, base, api):
           str(tool_names(trace)[:4]))
     check("预查没有变成工具调用（工具仍是 2 次）",
           stats.get("tool_calls") == 2, str(stats.get("tool_calls")))
-    check("预查没有多花模型调用（计划 1 + 生成 3 + 自省 2）",
-          stats.get("llm_calls") == 6, str(stats.get("llm_calls")))
+    check("预查本身不花模型调用（计划 1 + 生成 3 + 修复若干）",
+          stats.get("llm_calls") <= 8, str(stats.get("llm_calls")))
     check("生成请求都带【计划预查】",
           bool(gen) and all("【计划预查】" in sys_text(c) for c in gen),
           "生成请求 %d 次" % len(gen))

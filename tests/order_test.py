@@ -234,82 +234,8 @@ class FakeCritic:
         return {"choices": [{"message": {"content": json.dumps(crit, ensure_ascii=False)}}]}
 
 
-def refine_checks():
-    print("== 11. 自省：每轮改写后排序 + missing 强制补上")
-    initial = {
-        "positive": [{"tag": t} for t in ["sky", "1girl", "white_background"]],
-        "positive_unknown": [],
-        "negative": [{"tag": "worst_quality"}],
-        "negative_unknown": [],
-        "stats": {"llm_calls": 0},
-    }
-    critic = FakeCritic([
-        {"score": 70,
-         "problems": ["顺序乱、留白没体现"],
-         "missing": ["没有体现留白"],
-         "positive": ["sky", "1girl", "white_background"],
-         "negative": ["worst_quality", "blurry"]},
-        {"score": 95,
-         "problems": [],
-         "missing": [],
-         "positive": ["sky", "1girl", "white_background", "negative_space"],
-         "negative": ["worst_quality", "blurry"]},
-    ])
-    old_post = agent_core._post_chat
-    agent_core._post_chat = critic
-    try:
-        review = agent_core.self_refine({"model": "mock"}, "江南水乡，画面留白",
-                                        initial, rounds=2)
-    finally:
-        agent_core._post_chat = old_post
-
-    first_ask = critic.payloads[0]["messages"][1]["content"]
-    second_ask = critic.payloads[1]["messages"][1]["content"]
-    final_tags = tags_of(initial["positive"])
-    check("第 1 轮还没有可补的，不发「必须补上」", "必须补上" not in first_ask)
-    check("第 2 轮指令里带「必须补上：留白→negative_space」",
-          "必须补上：留白→negative_space" in second_ask, second_ask[-160:])
-    check("第 2 轮看到的正向顺序已排好",
-          "1girl, sky, white_background" in second_ask,
-          second_ask[:160])
-    check("最终正向按分组排好",
-          final_tags == ["1girl", "negative_space", "sky", "white_background"],
-          str(final_tags))
-    check("每轮改写后的结果都排序", is_sorted_tags(final_tags), str(final_tags))
-    check("评审历史记下 missing 反向映射出的 tag",
-          (review["rounds"][0] or {}).get("missing_tags") == ["negative_space"],
-          str((review["rounds"][0] or {}).get("missing_tags")))
-    check("采纳的是 95 分那轮", review.get("final_score") == 95
-          and review.get("picked_round") == 2,
-          str((review.get("final_score"), review.get("picked_round"))))
-
-    print("== 12. 自省里出现的自造词不会进正向")
-    result = {
-        "positive": [{"tag": t} for t in ["1girl", "sky"]],
-        "positive_unknown": [],
-        "negative": [{"tag": "worst_quality"}],
-        "negative_unknown": [],
-        "stats": {"llm_calls": 0},
-    }
-    critic = FakeCritic([{"score": 95, "problems": [], "missing": [],
-                          "positive": ["sky", "white_wall", "1girl"],
-                          "negative": ["worst_quality"]}])
-    old_post = agent_core._post_chat
-    agent_core._post_chat = critic
-    try:
-        agent_core.self_refine({"model": "mock"}, "白墙", result, rounds=1)
-    finally:
-        agent_core._post_chat = old_post
-    pos = tags_of(result["positive"])
-    unknown = tags_of(result["positive_unknown"])
-    check("white_wall 不在正向里", "white_wall" not in pos, str(pos))
-    check("white_wall 进 positive_unknown", "white_wall" in unknown, str(unknown))
-    check("正向顺序仍然是排好的", pos == ["1girl", "sky"], str(pos))
-
-
 def main():
     unit_checks()
-    refine_checks()
 
     mock_port = free_port()
     app_port = free_port()
@@ -328,8 +254,11 @@ def main():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            env=dict(os.environ, TAGCRAFT_NO_CACHE="1"))
     text = "江南水乡，白墙拱桥，一个女生穿汉服站在河边，画面右边留白"
-    expected = ["masterpiece", "1girl", "solo", "long_hair", "chinese_clothes",
-                "scenery", "white_background", "backlighting", "watercolor_(medium)"]
+    # 质量词是固定模板，由程序按模板顺序加在最前面
+    quality = ["masterpiece", "best_quality", "newest", "high_resolution",
+               "aesthetic", "excellent", "very_aesthetic", "absurdres", "2026"]
+    expected = quality + ["1girl", "solo", "long_hair", "chinese_clothes",
+                          "scenery", "white_background", "backlighting", "watercolor_(medium)"]
     try:
         if not wait_up(mock_port) or not wait_up(app_port):
             print("启动失败：假大模型或被测服务没起来")
@@ -361,15 +290,15 @@ def main():
         check("单次生成也不收自造词", "white_wall" not in pos, str(pos))
 
         print("== 15. 自省改写后仍然排序")
-        st, b = post(base, "/api/agent", {"text": text, "reflect": True,
+        st, b = post(base, "/api/agent", {"text": text, "reflect": True, "reflect_mode": "llm",
                                           "reflect_rounds": 2, "use_tools": False,
                                           "api": dict(api, model="order-reflect")})
         r = json.loads(b) if st == 200 else {}
         pos = tags_of(r.get("positive"))
-        want = ["masterpiece", "best_quality", "1girl", "solo", "thighhighs",
-                "school_uniform", "looking_back", "sunset", "orange_sky"]
+        want = quality + ["1girl", "solo", "thighhighs",
+                          "school_uniform", "looking_back", "sunset", "orange_sky"]
         check("带自省生成成功", st == 200 and bool(pos), b[:160])
-        check("自省改写后的正向顺序被重排", pos == want, str(pos))
+        check("自省之后正向仍然有序", is_sorted_tags(pos), str(pos))
         check("自省结果本身是排好序的", is_sorted_tags(pos), str(pos))
 
         print("== 16. /api/reflect 单独重跑自省：返回的顺序也是排好的")

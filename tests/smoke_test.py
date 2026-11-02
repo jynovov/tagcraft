@@ -160,8 +160,7 @@ def main():
         say("页面：")
         for path, must in [("/", "中文转 tag"),
                            ("/krea.html", "Krea 2 提示词"),
-                           ("/preferences.html", "偏好"),
-                           ("/favorites.html", "收藏"),
+                                              ("/favorites.html", "收藏"),
                            ("/history.html", "历史记录"),
                            ("/comfy.html", "工作流"),
                            ("/settings.html", "系统提示词")]:
@@ -173,7 +172,7 @@ def main():
 
         say("静态资源：")
         for path in ("/style.css", "/common.js", "/app.js", "/krea.js", "/settings.js",
-                     "/history.js", "/favorites.js", "/preferences.js", "/comfy.js"):
+                     "/history.js", "/favorites.js", "/comfy.js"):
             st, body = get(path)
             check("GET " + path, st == 200 and len(body) > 300, "%d 字节" % len(body))
 
@@ -184,6 +183,14 @@ def main():
         say("接口：")
         st, body = get("/api/status")
         check("GET /api/status", st == 200 and '"dict"' in body, "HTTP %s" % st)
+        o = json.loads(body)
+        consts = o.get("constants") or {}
+        check("status 带常量（质量词/负向/中文名）",
+              bool(consts.get("quality")) and bool(consts.get("negative"))
+              and bool(consts.get("tag_cn")), str(list(consts.keys())))
+        check("常量里的中文名覆盖质量词",
+              all(t in (consts.get("tag_cn") or {}) for t in consts.get("quality") or []),
+              str(consts.get("quality")))
         if st == 200:
             o = json.loads(body)
             say("      词表 %s 条 · 来源 %s"

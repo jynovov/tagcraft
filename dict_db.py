@@ -399,6 +399,18 @@ def download_dict(source=None):
                         os.remove(tmp)
                     except OSError:
                         pass
+    # 只在「本来就没有词表」时才用种子兜底；
+    # 已有完整词表时绝不能覆盖（以前这里会 import_csv(replace=True)，
+    # 网络一失败就把 33 万条词表清成 348 条种子）。
+    current = 0
+    try:
+        current = dict_count()
+    except Exception:  # noqa: BLE001
+        current = 0
+    if current >= 5000:
+        log("下载失败，保留现有词表（%d 条）：%s" % (current, last_err))
+        return {"ok": False, "count": current, "error": last_err,
+                "source": dict_meta().get("source") or "现有词表", "kept": True}
     if os.path.exists(SEED_PATH):
         n = import_csv(SEED_PATH, "内置种子词表（离线可用）")
         return {"ok": False, "count": n, "error": last_err,

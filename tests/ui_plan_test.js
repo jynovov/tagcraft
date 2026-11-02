@@ -153,7 +153,8 @@ chk('摘要包含要素与查词数量',
     $id('planSum').textContent);
 chk('要素渲染出来', $id('plan').innerHTML.indexOf('黄昏海边') >= 0);
 chk('查词方向渲染出来', $id('plan').innerHTML.indexOf('过膝袜') >= 0);
-chk('页面注明计划只做展示', $id('plan').innerHTML.indexOf('只做展示') >= 0);
+chk('计划面板只列要素/查词，没有多余提示句',
+    $id('plan').innerHTML.indexOf('只做展示') < 0);
 
 state.plan = null;
 render();

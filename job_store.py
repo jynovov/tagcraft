@@ -228,6 +228,19 @@ class JobStore:
             self._save_unlocked()
             return True
 
+    def meta(self, jid, **fields):
+        """给任务记中途产出的结构化数据（例如画面规划），进度接口能立刻读到。"""
+        with self._lock:
+            job = self._jobs.get(jid)
+            if job is None:
+                return False
+            for k, v in fields.items():
+                if v is not None:
+                    job[k] = copy.deepcopy(v)
+            job["updated"] = time.time()
+            self._save_unlocked()
+            return True
+
     def finish(self, jid, result=None, error=None):
         with self._lock:
             job = self._jobs.get(jid)
@@ -287,6 +300,10 @@ def step(jid, msg, pct=None):
 
 def finish(jid, result=None, error=None):
     return default_store().finish(jid, result=result, error=error)
+
+
+def meta(jid, **fields):
+    return default_store().meta(jid, **fields)
 
 
 def get(jid):

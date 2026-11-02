@@ -94,6 +94,9 @@ def get(base, path, timeout=30):
 
 
 def post(base, path, body, timeout=90):
+    if path == "/api/agent":
+        body.setdefault("fallback", False)
+        body.setdefault("compress", False)
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
@@ -234,7 +237,7 @@ def main():
         cfg = {"model": api["model"], "api_base": api["api_base"]}
         opts = dict(max_tags=45, temperature=0.6, max_rounds=6, reflect=False,
                     reflect_rounds=2, use_tools=True, extra_rules="",
-                    system_prompt="", prefs=[])
+                    system_prompt="")
         k_off = gen_cache.make_key("agent", text, cfg, "noob", plan=False, **opts)
         k_on = gen_cache.make_key("agent", text, cfg, "noob", plan=True, **opts)
         check("关/开计划的缓存 key 不同", k_off != k_on)

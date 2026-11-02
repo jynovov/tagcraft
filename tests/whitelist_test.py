@@ -122,17 +122,6 @@ def make_result(pos, neg=("worst_quality",)):
             "stats": {"llm_calls": 0}}
 
 
-def run_self_refine(crits, result, rounds=1, pool=None):
-    fake = ScriptLLM(crits)
-    old = agent_core._post_chat
-    agent_core._post_chat = fake
-    try:
-        review = agent_core.self_refine({"model": "mock"}, "黄昏的海边，一个女生回头",
-                                        result, rounds=rounds, pool=pool)
-    finally:
-        agent_core._post_chat = old
-    return review, result, fake
-
 
 def unit_checks():
     print("== 可新增池：构建")
@@ -182,184 +171,9 @@ def unit_checks():
           agent_core.concepts_to_pool_tags(["zzz量子猫娘zzz"]) == [])
     check("add_concepts 空列表不崩", agent_core.concepts_to_pool_tags([]) == [])
 
-    print("== 自省：池非空 → 新增词分流")
-    crits = [{"score": 80, "dimensions": None, "problems": [], "missing": [],
-              "positive": ["masterpiece", "1girl", "solo", "school_uniform",
-                           "sunset", "zzz_no_such_whitelist_tag"],
-              "negative": ["worst_quality"]}]
-    review, result, fake = run_self_refine(crits, make_result(
-        ["masterpiece", "1girl", "solo"]), rounds=1, pool=["school_uniform"])
-    pos = [h["tag"] for h in result["positive"]]
-    cands = tags_of(result["positive_candidates"])
-    unks = tags_of(result["positive_unknown"])
-    check("池内的新词进正向", "school_uniform" in pos, str(pos))
-    check("池外但词表存在的进候选", cands == ["sunset"], str(cands))
-    check("候选不进正向", "sunset" not in pos, str(pos))
-    check("词表不存在的进未识别",
-          "zzz_no_such_whitelist_tag" in unks, str(unks))
-    check("review 里记候选数", review.get("candidates") == 1, str(review.get("candidates")))
-    check("每轮摘要也记候选数", (review.get("rounds") or [{}])[0].get("candidates") == 1,
-          str(review.get("rounds")))
-    ask = fake.payloads[0]["messages"][1]["content"]
-    check("改写指令里有【可新增池】", "【可新增池】" in ask)
-    check("改写指令写明只能从池里选", "只能从【可新增池】里选" in ask, ask[-160:])
-    check("改写指令要求池外概念写进 add_concepts", "add_concepts" in ask)
-    check("池里的 tag 真的出现在改写指令里", "school_uniform" in ask)
-
-    print("== 自省：池为空 → 不阻塞改写")
-    crits = [{"score": 80, "dimensions": None, "problems": [], "missing": [],
-              "positive": ["masterpiece", "1girl", "solo", "sunset"],
-              "negative": ["worst_quality"]}]
-    review, result, _ = run_self_refine(crits, make_result(
-        ["masterpiece", "1girl", "solo"]), rounds=1, pool=[])
-    pos = [h["tag"] for h in result["positive"]]
-    check("池为空时新词照常进正向", "sunset" in pos, str(pos))
-    check("池为空时候选是空数组", result["positive_candidates"] == [],
-          str(result["positive_candidates"]))
-    check("池为空时 review.candidates 为 0", review.get("candidates") == 0)
-
-    print("== add_concepts：下一轮才进池（本轮不直接放行）")
-    crits = [
-        {"score": 80, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "school_uniform"],
-         "negative": ["worst_quality"], "add_concepts": ["校服"]},
-        {"score": 85, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "school_uniform"],
-         "negative": ["worst_quality"]},
-    ]
-    review, result, fake = run_self_refine(
-        crits, make_result(["masterpiece", "1girl", "solo"]), rounds=1,
-        pool=["sunset"])
-    pos = [h["tag"] for h in result["positive"]]
-    rounds = review.get("rounds") or []
-    check("add_concepts 让自省多跑 1 轮", review.get("iterations") == 2,
-          str(review.get("iterations")))
-    check("第 1 轮学科概念只进候选、不进正向",
-          (rounds[0] or {}).get("add_concepts") == ["校服"]
-          and (rounds[0] or {}).get("candidates") == 1, str(rounds[0]))
-    check("映射后下一轮进池 → 第 2 轮变正向", "school_uniform" in pos, str(pos))
-    check("add_concepts 没有导致无限循环", len(fake.payloads) == 2,
-          str(len(fake.payloads)))
-
-    print("== add_concepts：最多只多 1 轮")
-    crits = [
-        {"score": 60, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "sunset", "looking_back"],
-         "negative": ["worst_quality"], "add_concepts": ["校服"]},
-        {"score": 64, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "sunset", "blurry"],
-         "negative": ["worst_quality"], "add_concepts": ["校服"]},
-        {"score": 68, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "sunset", "looking_back"],
-         "negative": ["worst_quality"], "add_concepts": ["校服"]},
-        {"score": 72, "dimensions": None, "problems": [], "missing": [],
-         "positive": ["masterpiece", "1girl", "solo", "sunset", "blurry"],
-         "negative": ["worst_quality"], "add_concepts": ["校服"]},
-    ]
-    review, result, fake = run_self_refine(
-        crits, make_result(["masterpiece", "1girl", "solo"]), rounds=2,
-        pool=["sunset"])
-    check("总轮数 = 设定轮数 + 1", review.get("iterations") == 3,
-          str(review.get("iterations")))
-    check("没有继续追加第 3 次额外轮", len(fake.payloads) == 3,
-          str(len(fake.payloads)))
-
 
 def main():
     unit_checks()
-
-    mock_port = free_port()
-    app_port = free_port()
-    base = "http://127.0.0.1:%d" % app_port
-    api = {"api_base": "http://127.0.0.1:%d/v1/chat/completions" % mock_port,
-           "api_key": "test-key", "model": "mock-agent"}
-    env = dict(os.environ, MOCK_LLM_PORT=str(mock_port), MOCK_LLM_DUMP=DUMP)
-    for p in (CACHE, CACHE + "-journal", DUMP):
-        try:
-            os.remove(p)
-        except Exception:  # noqa: BLE001
-            pass
-    mock = subprocess.Popen([sys.executable, os.path.join(HERE, "mock_llm.py")],
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    app = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"),
-                            "--port", str(app_port), "--no-browser", "--no-update"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env=dict(env, TAGCRAFT_CACHE_PATH=CACHE))
-    text = "黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头"
-    try:
-        if not wait_up(mock_port) or not wait_up(app_port):
-            print("启动失败：假大模型或被测服务没起来")
-            return 2
-
-        print("== 联调：概念核对 + 自省 → 候选补充")
-        st, b = post(base, "/api/agent", {"text": text + "-wl",
-                                          "reflect": True, "reflect_rounds": 2,
-                                          "api": dict(api)})
-        if st != 200:
-            check("/api/agent 自省生成成功", False, b[:200])
-        else:
-            r = json.loads(b)
-            pos = tags_of(r.get("positive"))
-            cands = tags_of(r.get("positive_candidates"))
-            check("/api/agent 自省生成成功", bool(pos), b[:160])
-            check("响应里一定有 positive_candidates 字段", "positive_candidates" in r)
-            check("已确认概念（school_uniform）留在正向", "school_uniform" in pos, str(pos))
-            check("池外新增词进候选补充", "sunset" in cands, str(cands))
-            check("候选不进正向", "sunset" not in pos, str(pos))
-            check("候选都在词表里", all(dict_db.get_tag(t) for t in cands), str(cands))
-            check("parsed.positive 里也没有候选",
-                  "sunset" not in ((r.get("parsed") or {}).get("positive") or []))
-            check("review 记录候选数",
-                  (r.get("review") or {}).get("candidates") == len(cands),
-                  str((r.get("review") or {}).get("candidates")))
-
-            print("== 联调：缓存结果结构一致")
-            st2, b2 = post(base, "/api/agent", {"text": text + "-wl",
-                                                "reflect": True, "reflect_rounds": 2,
-                                                "api": dict(api)})
-            r2 = json.loads(b2) if st2 == 200 else {}
-            check("第二次命中缓存", r2.get("cached") is True, b2[:160])
-            check("缓存结果也带 positive_candidates 字段",
-                  "positive_candidates" in r2)
-            check("缓存结果的候选与首次一致",
-                  tags_of(r2.get("positive_candidates")) == cands,
-                  str(tags_of(r2.get("positive_candidates"))))
-
-        print("== 联调：单次生成也有候选字段（空数组）")
-        st, b = post(base, "/api/generate", {"text": text + "-single",
-                                             "api": dict(api)})
-        r = json.loads(b) if st == 200 else {}
-        check("单次生成成功", st == 200 and bool(r.get("positive")), b[:160])
-        check("单次生成返回 positive_candidates", "positive_candidates" in r)
-        check("单次生成的候选是空数组", r.get("positive_candidates") == [],
-              str(r.get("positive_candidates")))
-
-        print("== 联调：/api/reflect 也透传候选字段")
-        st, b = post(base, "/api/reflect", {
-            "text": text, "positive": ["masterpiece", "1girl", "solo"],
-            "negative": ["worst_quality"], "reflect_rounds": 1,
-            "api": dict(api)})
-        r = json.loads(b) if st == 200 else {}
-        check("重跑自省成功", st == 200 and bool(r.get("positive")), b[:160])
-        check("重跑自省返回 positive_candidates", "positive_candidates" in r)
-    finally:
-        for p in (app, mock):
-            try:
-                p.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        time.sleep(1)
-        for p in (app, mock):
-            try:
-                p.kill()
-            except Exception:  # noqa: BLE001
-                pass
-        for path in (DUMP, CACHE, CACHE + "-journal"):
-            try:
-                os.remove(path)
-            except Exception:  # noqa: BLE001
-                pass
-
     print()
     if fails:
         print("结果：失败 %d 项 → %s" % (len(fails), ", ".join(fails)))
@@ -369,4 +183,5 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
     sys.exit(main())

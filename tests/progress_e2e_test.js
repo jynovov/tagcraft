@@ -119,12 +119,14 @@ function waitUp(port, ms = 25000) {
       apiBase: API.api_base, apiKey: API.api_key, model: API.model,
       temperature: 0.6, agentRounds: 6, reflect: true, reflectRounds: 2
     });
+    store['tagcraft.plan'] = '1';        // 开规划展示：规划应该先到
     el('inputText').value = '黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头';
     el('maxTags').value = '40';
     el('useAgent').checked = true;
 
     vm.runInContext('generate()', ctx);
     const widths = [];
+    let planWhileRunning = false;
     const t0 = Date.now();
     for (let i = 0; i < 400; i++) {
       await sleep(120);
@@ -135,8 +137,13 @@ function waitUp(port, ms = 25000) {
         if (widths[widths.length - 1] !== w) widths.push(w);
       }
       const st = readState();
+      if (st && !st.done) {
+        const p = vm.runInContext('state.plan ? JSON.stringify({n:(state.plan.elements||[]).length}) : "null"', ctx);
+        if (p !== 'null' && JSON.parse(p).n > 0) planWhileRunning = true;
+      }
       if (st && st.done) break;
     }
+    check('规划在生成跑完之前就显示出来了', planWhileRunning);
     // 完成的瞬间刚好可能没渲染到 100%，等一拍再补读一次
     await sleep(400);
     try {
@@ -158,9 +165,10 @@ function waitUp(port, ms = 25000) {
     check('跑完时到达 100%', widths.length > 0 && widths[widths.length - 1] === 100,
           JSON.stringify(widths.slice(-3)));
     const applied = JSON.parse(vm.runInContext(
-      'JSON.stringify({pos:(state.positive||[]).length, neg:(state.negative||[]).length})', ctx));
-    check('跑完后结果真的填回了界面', applied.pos > 0 && applied.neg > 0,
-          JSON.stringify(applied));
+      'JSON.stringify({pos:(state.positive||[]).length, negText:(state.negText||"")})', ctx));
+    check('跑完后正向和固定负向都填回了界面',
+          applied.pos > 0 && applied.negText.indexOf('worst_quality') >= 0,
+          JSON.stringify({ pos: applied.pos, negText: applied.negText.slice(0, 40) }));
     const toasts = created.filter(e => String(e.className).indexOf('toast') >= 0)
                           .map(e => String(e.textContent || ''));
     check('运行过程中没有脚本报错弹出（例如 xxx is not defined）',

@@ -1,0 +1,762 @@
+{
+  "_说明": "TagCraft 50 条评测集。required = 必须出现的 tag（gold），optional = 加分项，notes = 这条考什么。改完先跑 python eval/check_dataset.py 校验 gold 是否都在词表里。",
+  "_版本": "2026-10-30",
+  "cases": [
+    {
+      "id": "A01",
+      "group": "单人基础",
+      "text": "一个高中女生，黑色长发，蓝色眼睛，穿白色校服，站在教室窗边微笑",
+      "required": [
+        "1girl",
+        "long_hair",
+        "school_uniform",
+        "smile",
+        "window"
+      ],
+      "optional": [
+        "black_hair",
+        "blue_eyes",
+        "classroom"
+      ],
+      "notes": "最基础的一条：主体/发/眼/服装/表情/场景"
+    },
+    {
+      "id": "A02",
+      "group": "单人基础",
+      "text": "银发红瞳的少女，双马尾，穿着黑色制服裙，回头看向镜头",
+      "required": [
+        "1girl",
+        "white_hair",
+        "twintails",
+        "looking_at_viewer"
+      ],
+      "optional": [
+        "red_eyes",
+        "school_uniform"
+      ],
+      "notes": "回头 + 视线，考 looking_at_viewer"
+    },
+    {
+      "id": "A03",
+      "group": "单人基础",
+      "text": "一个短发男生，穿黑色卫衣，双手插兜，靠在墙边看着前方",
+      "required": [
+        "1boy",
+        "short_hair",
+        "hoodie",
+        "standing"
+      ],
+      "optional": [
+        "hands_in_pockets"
+      ],
+      "notes": "男性主体，别写成 1girl"
+    },
+    {
+      "id": "A04",
+      "group": "单人基础",
+      "text": "扎着马尾的女孩坐在地上看书，阳光从侧面照进来",
+      "required": [
+        "1girl",
+        "ponytail",
+        "sitting",
+        "book",
+        "sunlight"
+      ],
+      "optional": [
+        "reading"
+      ],
+      "notes": "动作 + 光照"
+    },
+    {
+      "id": "A05",
+      "group": "单人基础",
+      "text": "戴眼镜的少女趴在桌上睡着了，头发散在桌面",
+      "required": [
+        "1girl",
+        "glasses",
+        "sleeping"
+      ],
+      "optional": [
+        "desk",
+        "lying"
+      ],
+      "notes": "睡眠状态；别漏 glasses"
+    },
+    {
+      "id": "A06",
+      "group": "单人基础",
+      "text": "一个红发女孩在雨中奔跑，衣服被淋湿，表情开心",
+      "required": [
+        "1girl",
+        "red_hair",
+        "rain",
+        "running",
+        "smile"
+      ],
+      "optional": [
+        "wet_clothes"
+      ],
+      "notes": "天气 + 动作"
+    },
+    {
+      "id": "A07",
+      "group": "单人基础",
+      "text": "金发碧眼的女性站在海边，穿着白色连衣裙，风吹起裙摆",
+      "required": [
+        "1girl",
+        "blonde_hair",
+        "dress",
+        "ocean",
+        "standing"
+      ],
+      "optional": [
+        "wind"
+      ],
+      "notes": "服装 + 环境"
+    },
+    {
+      "id": "A08",
+      "group": "单人基础",
+      "text": "一位穿和服的女性跪坐在榻榻米上，手里拿着折扇",
+      "required": [
+        "1girl",
+        "kimono",
+        "sitting",
+        "holding_fan"
+      ],
+      "optional": [
+        "tatami"
+      ],
+      "notes": "和服/跪坐是二次元高频词"
+    },
+    {
+      "id": "A09",
+      "group": "单人基础",
+      "text": "戴帽子的女孩在街头喝奶茶，手里拿着杯子",
+      "required": [
+        "1girl",
+        "hat",
+        "holding_cup",
+        "street"
+      ],
+      "optional": [
+        "drinking"
+      ],
+      "notes": "手持道具"
+    },
+    {
+      "id": "A10",
+      "group": "单人基础",
+      "text": "两个女生背靠背坐在草地上，一个在看手机，一个在笑",
+      "required": [
+        "2girls",
+        "sitting",
+        "grass",
+        "cellphone",
+        "smile"
+      ],
+      "optional": [
+        "back-to-back"
+      ],
+      "notes": "多人：人数 tag 必须对"
+    },
+    {
+      "id": "B11",
+      "group": "服装配饰",
+      "text": "穿着水手服的少女，白色过膝袜，黑色乐福鞋，抱着书包",
+      "required": [
+        "1girl",
+        "serafuku",
+        "thighhighs",
+        "loafers"
+      ],
+      "optional": [
+        "school_bag"
+      ],
+      "notes": "制服细节链"
+    },
+    {
+      "id": "B12",
+      "group": "服装配饰",
+      "text": "女仆装少女，白色围裙，头上戴着蕾丝发带，端着托盘",
+      "required": [
+        "1girl",
+        "maid",
+        "apron",
+        "hairband"
+      ],
+      "optional": [
+        "holding_tray"
+      ],
+      "notes": "女仆装 + 配饰"
+    },
+    {
+      "id": "B13",
+      "group": "服装配饰",
+      "text": "穿黑色皮夹克的女孩，脖子上戴着 choker，耳后有纹身",
+      "required": [
+        "1girl",
+        "jacket",
+        "choker"
+      ],
+      "optional": [
+        "tattoo",
+        "black_jacket"
+      ],
+      "notes": "朋克风格单品"
+    },
+    {
+      "id": "B14",
+      "group": "服装配饰",
+      "text": "猫耳少女，黑色尾巴，穿着短裙和过膝袜，坐着卖萌",
+      "required": [
+        "1girl",
+        "cat_ears",
+        "tail",
+        "skirt",
+        "thighhighs"
+      ],
+      "optional": [
+        "cat_ears"
+      ],
+      "notes": "兽耳必须出来"
+    },
+    {
+      "id": "B15",
+      "group": "服装配饰",
+      "text": "穿白色婚纱的新娘，头纱很长，手捧玫瑰花束",
+      "required": [
+        "1girl",
+        "wedding_dress",
+        "veil",
+        "bouquet"
+      ],
+      "optional": [
+        "rose"
+      ],
+      "notes": "婚纱场景低频词"
+    },
+    {
+      "id": "B16",
+      "group": "服装配饰",
+      "text": "泳装少女站在泳池边，戴着太阳镜，脖子上挂着毛巾",
+      "required": [
+        "1girl",
+        "swimsuit",
+        "sunglasses",
+        "pool"
+      ],
+      "optional": [
+        "towel"
+      ],
+      "notes": "泳装 + 道具"
+    },
+    {
+      "id": "B17",
+      "group": "服装配饰",
+      "text": "穿军装外套的少女，肩上别着徽章，手持长剑",
+      "required": [
+        "1girl",
+        "military_uniform",
+        "sword",
+        "holding_sword"
+      ],
+      "optional": [
+        "epaulettes"
+      ],
+      "notes": "军装 + 武器"
+    },
+    {
+      "id": "B18",
+      "group": "服装配饰",
+      "text": "长发少女穿着宽松毛衣，戴着毛线帽，围着围巾站在雪里",
+      "required": [
+        "1girl",
+        "sweater",
+        "beanie",
+        "scarf",
+        "snow"
+      ],
+      "optional": [
+        "long_hair"
+      ],
+      "notes": "冬季穿搭三件套"
+    },
+    {
+      "id": "B19",
+      "group": "服装配饰",
+      "text": "穿背带裙的小女孩，双马尾上系着蝴蝶结，手里拿着气球",
+      "required": [
+        "1girl",
+        "pinafore_dress",
+        "twintails",
+        "bow",
+        "balloon"
+      ],
+      "optional": [
+        "loli"
+      ],
+      "notes": "萝莉向单品"
+    },
+    {
+      "id": "B20",
+      "group": "服装配饰",
+      "text": "穿着运动服的少女在跑步，脚上是运动鞋，头发扎成高马尾",
+      "required": [
+        "1girl",
+        "track_suit",
+        "running",
+        "sneakers",
+        "ponytail"
+      ],
+      "optional": [
+        "sportswear"
+      ],
+      "notes": "运动系"
+    },
+    {
+      "id": "C21",
+      "group": "场景背景",
+      "text": "少女站在开满樱花的街道上，花瓣飘落",
+      "required": [
+        "1girl",
+        "cherry_blossoms",
+        "falling_petals",
+        "street"
+      ],
+      "optional": [
+        "standing"
+      ],
+      "notes": "樱花 + 落花"
+    },
+    {
+      "id": "C22",
+      "group": "场景背景",
+      "text": "一个女孩坐在图书馆里，四周是高高的书架，安静看书",
+      "required": [
+        "1girl",
+        "library",
+        "bookshelf",
+        "book"
+      ],
+      "optional": [
+        "sitting"
+      ],
+      "notes": "室内大场景"
+    },
+    {
+      "id": "C23",
+      "group": "场景背景",
+      "text": "穿校服的女生在神社的石阶上，旁边是红色鸟居",
+      "required": [
+        "1girl",
+        "shrine",
+        "torii",
+        "stairs"
+      ],
+      "optional": [
+        "school_uniform"
+      ],
+      "notes": "日式地标"
+    },
+    {
+      "id": "C24",
+      "group": "场景背景",
+      "text": "少年站在城市天台上，背景是密集的高楼和黄昏的天空",
+      "required": [
+        "1boy",
+        "rooftop",
+        "city",
+        "building",
+        "sunset"
+      ],
+      "optional": [
+        "sky"
+      ],
+      "notes": "城市 + 黄昏"
+    },
+    {
+      "id": "C25",
+      "group": "场景背景",
+      "text": "少女躺在花田里，周围全是向日葵，蓝天白云",
+      "required": [
+        "1girl",
+        "flower_field",
+        "sunflower",
+        "lying",
+        "blue_sky"
+      ],
+      "optional": [
+        "cloud"
+      ],
+      "notes": "花田 + 天空"
+    },
+    {
+      "id": "C26",
+      "group": "场景背景",
+      "text": "在夜晚的便利店里，女孩站着选零食，荧光灯很亮",
+      "required": [
+        "1girl",
+        "convenience_store",
+        "night",
+        "standing"
+      ],
+      "optional": [
+        "fluorescent_lamp"
+      ],
+      "notes": "夜间室内光"
+    },
+    {
+      "id": "C27",
+      "group": "场景背景",
+      "text": "少女坐在咖啡馆窗边，桌上放着咖啡杯和蛋糕",
+      "required": [
+        "1girl",
+        "cafe",
+        "window",
+        "coffee",
+        "cake"
+      ],
+      "optional": [
+        "sitting"
+      ],
+      "notes": "桌面静物"
+    },
+    {
+      "id": "C28",
+      "group": "场景背景",
+      "text": "穿泳衣的女孩在沙滩上奔跑，海浪拍打岸边",
+      "required": [
+        "1girl",
+        "beach",
+        "ocean",
+        "running"
+      ],
+      "optional": [
+        "swimsuit",
+        "waves"
+      ],
+      "notes": "海边动作"
+    },
+    {
+      "id": "C29",
+      "group": "场景背景",
+      "text": "女孩站在雨中的公交站牌下，撑着透明雨伞",
+      "required": [
+        "1girl",
+        "rain",
+        "umbrella",
+        "standing"
+      ],
+      "optional": [
+        "bus_stop"
+      ],
+      "notes": "雨景 + 透明伞"
+    },
+    {
+      "id": "C30",
+      "group": "场景背景",
+      "text": "在雪山脚下的木屋里，少女靠在壁炉旁取暖",
+      "required": [
+        "1girl",
+        "snow",
+        "wooden_house",
+        "fireplace"
+      ],
+      "optional": [
+        "mountain"
+      ],
+      "notes": "雪山：词表里没有 snow_mountain，考兜底"
+    },
+    {
+      "id": "D31",
+      "group": "光照构图",
+      "text": "少女逆光站在夕阳里，头发边缘发光，背景是虚化的城市",
+      "required": [
+        "1girl",
+        "backlighting",
+        "sunset",
+        "blurry_background"
+      ],
+      "optional": [
+        "depth_of_field"
+      ],
+      "notes": "逆光 + 景深"
+    },
+    {
+      "id": "D32",
+      "group": "光照构图",
+      "text": "从下往上拍的少女，仰视视角，天空在她身后",
+      "required": [
+        "1girl",
+        "from_below",
+        "sky"
+      ],
+      "optional": [
+        "looking_up"
+      ],
+      "notes": "视角 tag"
+    },
+    {
+      "id": "D33",
+      "group": "光照构图",
+      "text": "特写镜头，少女的脸部占满画面，眼睛有高光",
+      "required": [
+        "1girl",
+        "close-up",
+        "upper_body"
+      ],
+      "optional": [
+        "portrait"
+      ],
+      "notes": "景别"
+    },
+    {
+      "id": "D34",
+      "group": "光照构图",
+      "text": "全身像，少女站在空旷的白色背景前，四周留白",
+      "required": [
+        "1girl",
+        "full_body",
+        "negative_space",
+        "simple_background"
+      ],
+      "optional": [
+        "white_background"
+      ],
+      "notes": "留白 vs 全身：会触发构图冲突规则"
+    },
+    {
+      "id": "D35",
+      "group": "光照构图",
+      "text": "夜晚的星空下，少女抬头看流星，远处有光晕",
+      "required": [
+        "1girl",
+        "night",
+        "star_(sky)",
+        "starry_sky"
+      ],
+      "optional": [
+        "shooting_star"
+      ],
+      "notes": "星空夜景"
+    },
+    {
+      "id": "D36",
+      "group": "光照构图",
+      "text": "阳光透过树叶洒下来，斑驳光影落在少女身上",
+      "required": [
+        "1girl",
+        "sunlight",
+        "tree",
+        "dappled_sunlight"
+      ],
+      "optional": [
+        "leaf"
+      ],
+      "notes": "光斑：考是否能找到对应 tag"
+    },
+    {
+      "id": "D37",
+      "group": "光照构图",
+      "text": "闪光灯直拍的少女，画面很亮，影子很硬",
+      "required": [
+        "1girl",
+        "flash",
+        "high_contrast"
+      ],
+      "optional": [
+        "simple_background"
+      ],
+      "notes": "硬光"
+    },
+    {
+      "id": "D38",
+      "group": "光照构图",
+      "text": "广角镜头拍的空旷走廊，少女站在走廊尽头，透视很强",
+      "required": [
+        "1girl",
+        "wide_shot",
+        "hallway",
+        "perspective"
+      ],
+      "optional": [
+        "vanishing_point"
+      ],
+      "notes": "广角 + 透视"
+    },
+    {
+      "id": "D39",
+      "group": "光照构图",
+      "text": "侧脸特写，少女望向窗外，光线柔和",
+      "required": [
+        "1girl",
+        "profile",
+        "window"
+      ],
+      "optional": [
+        "from_side"
+      ],
+      "notes": "侧脸"
+    },
+    {
+      "id": "D40",
+      "group": "光照构图",
+      "text": "俯视角度拍摄，少女躺在床上，被子盖到胸口",
+      "required": [
+        "1girl",
+        "from_above",
+        "lying",
+        "bed"
+      ],
+      "optional": [
+        "blanket"
+      ],
+      "notes": "俯视"
+    },
+    {
+      "id": "E41",
+      "group": "复杂中文词",
+      "text": "江南古镇的巷子里，白墙黛瓦，青石板路，屋檐下挂着红灯笼",
+      "required": [
+        "lantern",
+        "eaves"
+      ],
+      "optional": [
+        "east_asian_architecture"
+      ],
+      "notes": "白墙黛瓦/青石板 词表没有中文名：验兜底"
+    },
+    {
+      "id": "E42",
+      "group": "复杂中文词",
+      "text": "庭院里的假山流水，太湖石堆叠，池中有锦鲤",
+      "required": [
+        "garden",
+        "koi",
+        "pond"
+      ],
+      "optional": [
+        "rock"
+      ],
+      "notes": "假山/太湖石是低频词"
+    },
+    {
+      "id": "E43",
+      "group": "复杂中文词",
+      "text": "古风少女撑着油纸伞，走过青砖小巷，衣袂飘飘",
+      "required": [
+        "1girl",
+        "oil-paper_umbrella",
+        "alley"
+      ],
+      "optional": [
+        "hanfu"
+      ],
+      "notes": "油纸伞"
+    },
+    {
+      "id": "E44",
+      "group": "复杂中文词",
+      "text": "少女站在城墙上，远处是连绵的烽火台和落日",
+      "required": [
+        "1girl",
+        "stone_wall",
+        "sunset"
+      ],
+      "optional": [
+        "fortress"
+      ],
+      "notes": "城墙/烽火台"
+    },
+    {
+      "id": "E45",
+      "group": "复杂中文词",
+      "text": "一位剑客在竹林中挥剑，竹叶飘落，剑气凌厉",
+      "required": [
+        "1boy",
+        "sword",
+        "bamboo",
+        "falling_leaves"
+      ],
+      "optional": [
+        "holding_sword",
+        "forest"
+      ],
+      "notes": "竹林 + 动态"
+    },
+    {
+      "id": "E46",
+      "group": "抽象/风格",
+      "text": "孤独的少女坐在空荡的电车里，望向窗外，气氛压抑",
+      "required": [
+        "1girl",
+        "train",
+        "sitting",
+        "window"
+      ],
+      "optional": [],
+      "notes": "情绪词（孤独/压抑）无法直接转 tag"
+    },
+    {
+      "id": "E47",
+      "group": "抽象/风格",
+      "text": "水彩风格的插图，少女在梦中漂浮，画面柔和朦胧",
+      "required": [
+        "1girl",
+        "watercolor_(medium)",
+        "floating"
+      ],
+      "optional": [
+        "dreaming"
+      ],
+      "notes": "风格词必须进风格组"
+    },
+    {
+      "id": "E48",
+      "group": "抽象/风格",
+      "text": "黑白漫画分镜风格，少女回头，速度线很强",
+      "required": [
+        "1girl",
+        "monochrome",
+        "comic",
+        "speed_lines"
+      ],
+      "optional": [
+        "looking_back"
+      ],
+      "notes": "黑白 + 漫画风"
+    },
+    {
+      "id": "E49",
+      "group": "抽象/风格",
+      "text": "赛博朋克风格的少女，霓虹灯牌，机械义肢，雨夜街道",
+      "required": [
+        "1girl",
+        "cyberpunk",
+        "neon_lights",
+        "night",
+        "rain"
+      ],
+      "optional": [
+        "prosthetic_arm"
+      ],
+      "notes": "赛博朋克组合"
+    },
+    {
+      "id": "E50",
+      "group": "抽象/风格",
+      "text": "Q 版可爱的少女，大头小身子，抱着猫，背景简单",
+      "required": [
+        "1girl",
+        "chibi",
+        "cat"
+      ],
+      "optional": [
+        "simple_background",
+        "holding_animal"
+      ],
+      "notes": "Q版风格"
+    }
+  ]
+}
