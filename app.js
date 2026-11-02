@@ -7,7 +7,8 @@ const state = {
   quality: [],    // 质量词（单独一组）
   positive: [],   // 正向 tag
   candidates: [], // 候选补充：自省想加、但不在可新增池里的词（词表存在，点一下进正向）
-  negative: [],   // 负向 tag
+  negative: [],   // 兼容旧结构：负向不再生成，恒为空
+  negText: '',    // 固定通用负向提示词（生成结束后自动填）
   unknown: [],    // 未识别：{tag, suggestions, kind}
   notes: '',
   stats: null,    // {model, checked, unknown, ms, tool_calls}
@@ -32,21 +33,19 @@ const LS_WORK_OLD = 'tagcraft.work';   // 更早的单份方案
 
 let saved = null;   // 上次状态的内存镜像（render 时同步）
 
-function escHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
 
 /** 界面上的东西整理成可存的一份状态 */
 function statePayload() {
   return {
     text: $('inputText').value,
     maxTags: $('maxTags').value,
-    agent: $('useAgent').checked,
+    reflect: $('useAgent').checked,   // 页面上的「自省」开关
     weight: $('useWeight').checked,
     quality: state.quality,
     positive: state.positive,
     candidates: state.candidates,
     negative: state.negative,
+    negText: state.negText,
     unknown: state.unknown,
     notes: state.notes,
     stats: state.stats,
@@ -69,12 +68,13 @@ function normalizeSaved(x) {
   return {
     text: typeof x.text === 'string' ? x.text : '',
     maxTags: x.maxTags != null ? String(x.maxTags) : '40',
-    agent: x.agent !== false,
+    reflect: x.reflect !== false,
     weight: !!x.weight,
     quality: arr(x.quality),
     positive: arr(x.positive),
     candidates: arr(x.candidates),
     negative: arr(x.negative),
+    negText: typeof x.negText === 'string' ? x.negText : '',
     unknown: arr(x.unknown),
     notes: typeof x.notes === 'string' ? x.notes : '',
     stats: (x.stats && typeof x.stats === 'object') ? x.stats : null,
@@ -132,7 +132,7 @@ function applySaved(s) {
   const d = s || {};
   $('inputText').value = d.text || '';
   $('maxTags').value = d.maxTags || '40';
-  $('useAgent').checked = d.agent !== false;
+  $('useAgent').checked = d.reflect !== false;
   $('useWeight').checked = !!d.weight;
   state.quality = d.quality || [];
   state.positive = d.positive || [];
@@ -164,7 +164,7 @@ function curDraft() { return saved; }
 function resetView() {
   $('inputText').value = '';
   state.quality = []; state.positive = []; state.candidates = [];
-  state.negative = []; state.unknown = [];
+  state.negative = []; state.negText = ''; state.unknown = [];
   state.notes = ''; state.stats = null; state.trace = []; state.review = null;
   state.plan = null;
   state.progress = null;
@@ -172,6 +172,30 @@ function resetView() {
 }
 
 /* ---------------------------------------------------------------- 渲染 */
+
+/** 负向是固定模板文本，拆成 chip 只为在结果栏里展示 */
+function negChips(text) {
+  return String(text || '').split(',').map(s => s.trim()).filter(Boolean)
+    .map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+}
+
+// 模板 tag 的中文名（和后端 prompts.py 的 TAG_CN 保持一致）
+const TAG_CN_FALLBACK = {
+  masterpiece: '杰作', best_quality: '最佳质量', newest: '最新',
+  high_resolution: '高分辨率', aesthetic: '美学', excellent: '优秀',
+  very_aesthetic: '极具美感', absurdres: '超高分辨率', '2026': '2026 年',
+  lowres: '低分辨率', worst_quality: '最差质量', low_quality: '低质量',
+  normal_quality: '普通质量', jpeg_artifacts: 'JPEG 压缩痕迹',
+  bad_anatomy: '解剖错误', bad_hands: '手部崩坏', extra_digits: '多余手指',
+  fewer_digits: '缺失手指', missing_fingers: '缺少手指'
+};
+
+/** 负向 chip：跟质量词同一套中性样式，可删除、可拖动，带中文 */
+function negChip(c, i) {
+  return `<div class="tag" data-kind="neg" data-i="${i}" draggable="true" title="${escHtml(c.tag)}">
+      <span class="t">${escHtml(c.tag)}</span>${c.cn ? `<span class="cn">${escHtml(c.cn)}</span>` : ''}
+      <span class="x" data-del="${i}" data-kind="neg">×</span></div>`;
+}
 
 function chip(c, i, kind) {
   const w = c.weight && c.weight !== 1 ? `<span class="w">${c.weight.toFixed(1)}</span>` : '';
@@ -181,12 +205,18 @@ function chip(c, i, kind) {
       <span class="x" data-del="${i}" data-kind="${kind}">×</span></div>`;
 }
 
+/** 规划面板：实现挪到了 common.js，这里只传本页需要的参数 */
+function renderPlan() {
+  renderPlanBox(state.plan, { withQueries: true });
+}
+
 function render() {
   $('qTags').innerHTML = state.quality.map((c, i) => chip(c, i, 'q')).join('');
   $('posTags').innerHTML = state.positive.map((c, i) => chip(c, i, 'pos')).join('');
-  $('negTags').innerHTML = state.negative.map((c, i) => chip(c, i, 'neg')).join('');
   $('unkTags').innerHTML = state.unknown.map((u, i) =>
     `<span class="unk" data-u="${i}" title="点击看候选">${u.tag}</span>`).join('');
+  $('negTags').innerHTML = (state.negative || []).map((c, i) => negChip(c, i)).join('');
+  $('negCount').textContent = (state.negative || []).length;
 
   // 候选补充：自省想加、但不在可新增池里的词（词表已确认）。点了就进正向
   const cands = state.candidates || [];
@@ -203,15 +233,7 @@ function render() {
 
   $('qCount').textContent = state.quality.length;
   $('posCount').textContent = state.positive.length;
-  $('negCount').textContent = state.negative.length;
   $('unkCount').textContent = state.unknown.length;
-
-  // 负向组只显示有效词；被词表拒掉的负向单独给一句提示，但不混进负向组
-  const negRemoved = (state.unknown || []).filter(u => u && u.kind === 'neg').length;
-  const negNote = $('negRemoved');
-  if (negNote) {
-    negNote.textContent = negRemoved ? '已移除 ' + negRemoved + ' 个无效负向' : '';
-  }
 
   const n = $('notes');
   if (state.notes) { n.textContent = state.notes; n.classList.add('show'); }
@@ -242,105 +264,26 @@ function render() {
 
 /* 画面规划：在轨迹区最上方单独一块，可折叠（默认展开）。
  * 只做展示 —— 查词循环仍由模型自己决定查什么。 */
-function renderPlan() {
-  const p = state.plan;
-  const box = $('planBox');
-  if (!box) return;
-  const els = (p && Array.isArray(p.elements)) ? p.elements : [];
-  const qs = (p && Array.isArray(p.queries)) ? p.queries : [];
-  if (!els.length && !qs.length) {
-    box.hidden = true;
-    $('plan').innerHTML = '';
-    return;
-  }
-  box.hidden = false;
-  $('planSum').textContent = '画面规划 · ' + els.length + ' 个要素 · ' + qs.length + ' 个查词方向';
-  $('plan').innerHTML =
-    (els.length
-      ? '<div class="step"><span class="tool">要素</span>' +
-        '<span class="sum">' + els.map(escHtml).join('、') + '</span></div>'
-      : '') +
-    (qs.length
-      ? '<div class="step"><span class="tool">查词</span>' +
-        '<span class="sum">' + qs.map(escHtml).join('、') + '</span></div>'
-      : '') +
-    '<div class="step"><span class="sum">计划只做展示，模型仍会自主决定查什么</span></div>';
-}
 
 /* 折叠面板：收起时只显示步数 / 轮数 / 得分 */
+/** 轨迹面板：实现挪到 common.js；tag 页多一行概念核对摘要 */
 function renderTrace() {
-  const tr = state.trace || [];
-  const box = $('traceBox');
   const c = state.stats || {};
   const conceptLine = (c.concepts_confirmed != null)
     ? '<div class="step"><span class="tool">概念</span><span class="sum">概念核对 · 已确认 ' +
       (c.concepts_confirmed || 0) + ' 个 · 未确认 ' + (c.concepts_unknown || 0) + ' 个</span></div>'
     : '';
-  // 单次生成没有工具轨迹，但概念核对摘要要能单独显示出来
-  if (!tr.length && !conceptLine) {
-    box.hidden = true;
-    $('trace').innerHTML = '';
-    return;
-  }
-  box.hidden = false;
-  $('traceSum').textContent = '智能体工具调用轨迹 · ' + tr.length + ' 步';
-  $('trace').innerHTML = conceptLine + tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
-      <span class="rnd">${s.round}</span>
-      <span class="tool">${s.tool}</span>
-      <span class="sum">${s.summary || ''}</span>
-    </div>`).join('');
+  renderTraceBox(state.trace, { label: '智能体工具调用轨迹', extraHtml: conceptLine });
 }
 
+/** 结构校验面板：实现挪到 common.js */
 function renderReview() {
-  const rv = state.review;
-  const box = $('reviewBox');
-  if (!rv) { box.hidden = true; $('review').innerHTML = ''; return; }
-  box.hidden = false;
-  const rounds = rv.rounds || [];
-  const picked = (rv.picked_round && rv.final_score != null)
-    ? ' · 采用第 ' + rv.picked_round + ' 轮（' + rv.final_score + ' 分）'
-    : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
-  const candSum = (rv.candidates || (state.candidates || []).length)
-    ? ' · 候选补充 ' + (rv.candidates || (state.candidates || []).length) + ' 个' : '';
-  $('reviewSum').textContent = rv.error
-    ? '自省评审 · 未完成（点开可重试）'
-    : '自省评审 · ' + rounds.length + ' 轮' + picked + candSum;
-  if (rv.error) {
-    $('review').innerHTML =
-      '<div class="step"><span class="tool">提示</span><span class="sum">' +
-      '自省这一步没跑完，上面的 tag 结果是好的，可以直接用。</span></div>' +
-      '<div class="step warn">' + escHtml(rv.error) + '</div>' +
-      '<div class="step"><button class="small" id="btnRetryReflect">重试自省</button>' +
-      '<span class="sum">只重跑评审，不会改动已生成的内容</span></div>';
-    const b = $('review').querySelector('#btnRetryReflect');
-    if (b) b.addEventListener('click', retryReflect);
-    return;
-  }
-  $('review').innerHTML = rounds.map((r, i) => {
-    const prev = i > 0 ? rounds[i - 1].score : null;
-    const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
-    const probs = (r.problems || []).length
-      ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
-    const miss = (r.missing || []).length
-      ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
-    const dims = reviewDimLine(r.dimensions);
-    const candLine = r.candidates
-      ? ' · 候选补充 ' + r.candidates + ' 个' : '';
-    return `<div class="step">
-        <span class="rnd">${i + 1}</span>
-        <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
-        <span class="sum">改动 ${r.changed || 0} 个${candLine}${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
-        ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
-        ${dims ? '<div class="dims">' + dims + '</div>' : ''}
-        ${probs}${miss}
-      </div>`;
-  }).join('') + (() => {
-    // 老记录或评审没给分项时，兜底用最终采用那轮的分项（服务端 final_dims）
-    if (rounds.some(r => reviewDimLine(r.dimensions))) return '';
-    const line = reviewDimLine(rv.final_dims);
-    return line ? '<div class="step"><span class="rnd">·</span>' +
-      '<span class="sum">采用轮分项</span><div class="dims">' + line + '</div></div>' : '';
-  })();
+  renderReviewBox(state.review, {
+    title: '结构校验', unit: '个', showCandidates: true,
+    incompleteText: '结构校验没跑完，上面的 tag 结果是好的，可以直接用。',
+    retryLabel: '重试校验', retryHint: '只重跑评审，不会改动已生成的内容',
+    onRetry: () => retryReflect()
+  });
 }
 
 /** 用接口返回的 tag 列表刷新界面（生成页与「重试自省」共用） */
@@ -357,10 +300,11 @@ function applyResult(r) {
     (isQuality(c) ? state.quality : state.positive).push(c);
   }
   (r.positive_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'pos' })));
-  state.negative = (r.negative || []).map(h => ({
-    tag: h.tag, cn: h.cn || '', category: h.category,
-    post_count: h.post_count || 0, weight: 1, policy: h.policy }));
-  (r.negative_unknown || []).forEach(u => state.unknown.push(Object.assign({}, u, { kind: 'neg' })));
+  const negList = (r.negative_tags && r.negative_tags.length)
+    ? r.negative_tags : negChips(r.negative_text || '');
+  state.negative = negList.map(h => ({ tag: h.tag, cn: h.cn || '', category: 0,
+                                       post_count: 0, weight: 1 }));
+  state.negText = state.negative.map(c => c.tag).join(', ');
   tidy();
 }
 
@@ -370,16 +314,16 @@ async function retryReflect() {
   const tags = state.quality.concat(state.positive).map(c => c.tag);
   if (!tags.length && !state.negative.length) { toast('还没有 tag 可以评审', true); return; }
   const btn = $('review').querySelector('#btnRetryReflect');
-  if (btn) { btn.disabled = true; btn.textContent = '自省中…'; }
-  toast('正在重试自省…');
+  if (btn) { btn.disabled = true; btn.textContent = '校验中…'; }
+  toast('正在重新校验…');
   try {
     const r = await api('/api/reflect', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: $('inputText').value,
         positive: tags,
-        negative: state.negative.map(c => c.tag),
-        reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
+        negative: [],
+        reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
         aux_model: auxModelName(),
         api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
       })
@@ -388,14 +332,14 @@ async function retryReflect() {
     state.review = r.review || null;
     if (state.stats) {
       state.stats.model += (r.stats && r.stats.llm_calls) || 0;
-      state.stats.checked = tags.length + state.negative.length;
+      state.stats.checked = tags.length;
     }
     const sc = r.review && r.review.final_score;
-    toast(sc != null ? '自省完成：' + sc + ' 分' : '自省完成');
+    toast(sc != null ? '结构校验完成：' + sc + ' 分' : '结构校验完成');
     render();
   } catch (e) {
     toast(e.message, true);
-    if (btn) { btn.disabled = false; btn.textContent = '重试自省'; }
+    if (btn) { btn.disabled = false; btn.textContent = '重试校验'; }
   }
 }
 
@@ -410,7 +354,7 @@ function renderOut() {
   const w = $('useWeight').checked;
   $('outQuality').value = state.quality.map(c => fmt(c, w)).join(', ');
   $('outPos').value = state.positive.map(c => fmt(c, w)).join(', ');
-  $('outNeg').value = state.negative.map(c => fmt(c, w)).join(', ');
+  $('outNeg').value = (state.negative || []).map(c => c.tag).join(', ');
 }
 
 function bindTags() {
@@ -437,6 +381,9 @@ function bindTags() {
     el.addEventListener('click', (ev) => {
       ev.stopPropagation();
       arr(el.dataset.kind).splice(+el.dataset.del, 1);
+      if (el.dataset.kind === 'neg') {
+        state.negText = (state.negative || []).map(c => c.tag).join(', ');
+      }
       render();
     });
   });
@@ -622,7 +569,6 @@ function finishGenerate(r, ms) {
 async function generate() {
   const text = $('inputText').value.trim();
   if (!text) { toast('先写点描述', true); return; }
-  const agent = $('useAgent').checked;
   const btn = $('btnGenerate');
   const st = loadSettings();
   const body = {
@@ -630,71 +576,45 @@ async function generate() {
     max_tags: +$('maxTags').value || 40,
     temperature: st.temperature ? +st.temperature : 0.6,
     max_rounds: st.agentRounds ? +st.agentRounds : 6,
-    reflect: st.reflect !== false,
+    reflect: $('useAgent').checked,   // 自省开关（生成页）
     reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
     system_prompt: localStorage.getItem(LS_PROMPT) || '',
-    prefs: prefsTagsForRequest(),   // 偏好 tag（最多 20 个）；没开 / 没生效的那套时是空数组
     plan: planOn(),                 // 规划展示：关着时后端连那次模型都不调
     aux_model: auxModelName(),      // 辅助模型（计划/评审）；空 = 主模型
     api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
   };
   state.lastText = text;
+  // 生成前正负两个输出框都清空，负向等生成完由服务端填固定通用负向
+  state.negText = '';
+  state.negative = [];
+  $('outNeg').value = '';
+  if ($('negTags')) $('negTags').innerHTML = '';
   btn.disabled = true;
-  btn.textContent = agent ? '智能体运行中…' : '生成中…';
+  btn.textContent = '运行中…';
 
-  // 智能体模式：丢到后台任务跑，前端轮询进度（这样每一步都看得见，也不怕请求超时）
-  if (agent) {
-    try {
-      const r = await api('/api/agent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({}, body, { async: true }))
-      });
-      if (!r.job_id) throw new Error('服务没有返回任务号');
-      sessionStorage.setItem(LS_JOB, r.job_id);
-      state.progress = { pct: 2, msg: '任务已提交，等待模型响应',
-                         startedAt: Date.now(), status: 'running', done: false };
-      state.trace = [];
-      state.review = null;
-      state.plan = null;
-      render();
-      startTick();
-      pollJob(r.job_id, btn);
-      return;
-    } catch (e) {
-      toast(e.message, true);
-      btn.disabled = false;
-      btn.textContent = '生成 tag';
-      return;
-    }
-  }
-
-  // 单次模式：一次请求拿到结果
-  const t0 = Date.now();
-  toast('正在生成…');
+  // tag 模式固定走智能体（后台任务 + 轮询进度，每一步都看得见，也不怕请求超时）。
+  // 后端遇到不支持工具的接口会自动降级成单次生成，这里不用再分支。
   try {
-    const r = await api('/api/generate', {
+    const r = await api('/api/agent', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(Object.assign({}, body, { async: true }))
     });
-    if (r.error && !r.parsed) {
-      toast(r.error, true);
-      state.notes = r.raw ? '模型原文：' + String(r.raw).slice(0, 300) : '';
-      state.trace = r.trace || [];
-      state.review = r.review || null;
-      state.plan = r.plan || null;
-      render();
-      return;
-    }
-    finishGenerate(r, Date.now() - t0);
-    toast('完成：质量词 ' + state.quality.length + ' · 正向 ' + state.positive.length +
-          ' · 负向 ' + state.negative.length);
+    if (!r.job_id) throw new Error('服务没有返回任务号');
+    sessionStorage.setItem(LS_JOB, r.job_id);
+    state.progress = { pct: 2, msg: '任务已提交，等待模型响应',
+                       startedAt: Date.now(), status: 'running', done: false };
+    state.trace = [];
+    state.review = null;
+    state.plan = null;
     render();
-    pushHistory(text);
+    startTick();
+    pollJob(r.job_id, btn);
+    return;
   } catch (e) {
     toast(e.message, true);
-  } finally {
     btn.disabled = false;
     btn.textContent = '生成 tag';
+    return;
   }
 }
 
@@ -707,6 +627,7 @@ async function pollJob(jid, btn) {
     state.progress = { pct: j.pct || 0, msg: j.msg || '', status: j.status,
                        startedAt: prev.startedAt || Date.now(), shown: prev.shown,
                        done: j.status !== 'running' };
+    if (j.plan) state.plan = j.plan;   // 规划先到先显示，不等整条跑完
     if (j.status === 'running') {
       render();
       pollTimer = setTimeout(() => pollJob(jid, btn), 400);
@@ -857,7 +778,7 @@ function startTick() {
   tickTimer = setInterval(() => {
     if (state.progress && !state.progress.done) renderProgress();
     else stopTick();
-  }, 400);
+  }, 100);
 }
 
 function stopTick() {
@@ -865,60 +786,11 @@ function stopTick() {
   tickTimer = null;
 }
 
-/** 只重画进度块（进度条 + 当前状态，每秒刷新用时） */
+/** 进度条：实现挪到 common.js */
 function renderProgress() {
-  const box = $('progress');
-  const p = state.progress;
-  if (!p) {
-    box.classList.remove('show');
-    box.innerHTML = '';
-    return;
-  }
-  box.classList.add('show');
-  const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
-  const interrupted = p.status === 'interrupted';
-  const finished = p.done && !interrupted;
-
-  // 目标值来自服务端（按阶段/轮数/每次工具调用估算），这里再平滑逼近，
-  // 这样 400ms 才轮询一次也不会一格一格地跳。
-  const target = finished ? 100 : Math.max(0, Math.min(97, p.pct || 0));
-  if (typeof p.shown !== 'number') p.shown = target;   // 首次直接显示真实值，之后再平滑
-  // 平滑追目标；追上了就慢慢往上爬（最多比真实目标多 6%），保证"看起来一直在动"
-  const cap = finished ? 100 : Math.min(96.5, target + 6);
-  if (p.shown < target) {
-    p.shown = Math.min(target, p.shown + Math.max(0.5, (target - p.shown) * 0.3));
-  } else if (p.shown < cap) {
-    p.shown = Math.min(cap, p.shown + 0.25);
-  }
-  if (finished) p.shown = 100;
-  const pct = Math.round(p.shown);
-  // 中断的任务保留停住时的进度，不假装跑完了
-  const width = interrupted ? Math.round(p.pct || 0) : (finished ? 100 : pct);
-
-  let head;
-  if (interrupted) {
-    head = '上次运行被中断';
-  } else if (!p.done) {
-    head = '<span class="spin"></span>智能体运行中… ' + pct + '% · 已用 ' + secs + ' 秒';
-  } else if (p.status === 'error') {
-    head = '运行失败 · 用时 ' + secs + ' 秒';
-  } else {
-    head = '完成 · 用时 ' + secs + ' 秒';
-  }
-  box.innerHTML =
-    '<div class="progress-head">' + head + '</div>' +
-    '<div class="pbar' + (finished ? ' done' : '') + '">' +
-    '<div class="pbar-fill" style="width:' + width + '%"></div></div>' +
-    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>' +
-    (interrupted
-      ? '<div class="retry-row"><button class="small" id="btnRetryJob">重试</button>' +
-        '<span>用上次的描述和参数重新跑一遍</span></div>'
-      : '');
-  if (interrupted) {
-    const b = box.querySelector('#btnRetryJob');
-    if (b) b.addEventListener('click', () => retryJob(p.jobId, b));
-  }
+  renderProgressBox(state.progress, { onRetry: (id, btn) => retryJob(id, btn) });
 }
+
 
 function pushHistory(text) {
   const list = loadHistory();
@@ -930,7 +802,8 @@ function pushHistory(text) {
     full: text,
     quality: state.quality.map(c => c.tag),
     pos: state.positive.map(c => c.tag),
-    neg: state.negative.map(c => c.tag),
+    neg: [],
+  negText: state.negText,
     stats: {
       llm_calls: st.model || 0,
       tool_calls: st.tool_calls || 0,
@@ -959,34 +832,38 @@ function favCurrent() {
 /* ---------------------------------------------------------------- 重新校验 */
 
 async function revalidate() {
-  const tags = state.quality.concat(state.positive, state.negative).map(c => c.tag);
-  if (!tags.length) return;
+  // 只校验正向 tag：质量词和负向都是固定模板，不在词表里也不能被“未识别”吃掉
+  const tags = (state.positive || []).map(c => c.tag);
+  if (!tags.length) { toast('还没有正向 tag', true); return; }
   const r = await api('/api/dict/validate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tags })
   });
-  const okSet = new Set(r.valid.map(v => v.tag));
-  const keep = { q: [], pos: [], neg: [] };
-  for (const key of ['q', 'pos', 'neg']) {
-    for (const c of arr(key)) {
-      if (okSet.has(c.tag)) keep[key].push(c);
-      else state.unknown.push({ tag: c.tag, suggestions: [], kind: key });
-    }
+  const okSet = new Set((r.valid || []).map(v => v.tag));
+  const keepPos = [];
+  const unknown = [];
+  for (const c of state.positive) {
+    if (okSet.has(c.tag)) keepPos.push(c);
+    else unknown.push({ tag: c.tag, suggestions: [], kind: 'pos' });
   }
-  state.quality = keep.q; state.positive = keep.pos; state.negative = keep.neg;
+  state.positive = keepPos;
+  state.unknown = unknown;          // 重新校验=重算，不要在旧的未识别上继续堆
   for (const u of state.unknown) {
-    if (u.suggestions && u.suggestions.length) continue;
     try {
-      const s = await api('/api/dict/suggest?tag=' + encodeURIComponent(u.tag));
-      u.suggestions = s.results || [];
+      const s2 = await api('/api/dict/suggest?tag=' + encodeURIComponent(u.tag));
+      u.suggestions = s2.results || [];
     } catch (e) { /* ignore */ }
   }
-  state.stats = { model: state.stats ? state.stats.model : 0,
-                  tool_calls: state.stats ? state.stats.tool_calls : 0,
-                  checked: tags.length, unknown: state.unknown.length,
-                  concepts_confirmed: state.stats ? state.stats.concepts_confirmed : null,
-                  concepts_unknown: state.stats ? state.stats.concepts_unknown : null,
-                  ms: 0 };
+  const prev = state.stats || {};
+  state.stats = {
+    model: prev.model || 0,
+    tool_calls: prev.tool_calls || 0,
+    checked: tags.length,
+    unknown: state.unknown.length,
+    concepts_confirmed: prev.concepts_confirmed != null ? prev.concepts_confirmed : null,
+    concepts_unknown: prev.concepts_unknown != null ? prev.concepts_unknown : null,
+    ms: 0
+  };
   tidy();
   toast('已按词表校验');
   render();
@@ -1024,12 +901,6 @@ async function doSearch() {
 
 /* ---------------------------------------------------------------- 复制 & 发送到 ComfyUI */
 
-function copy(value) {
-  if (!value) { toast('没有内容', true); return; }
-  navigator.clipboard.writeText(value).then(
-    () => toast('已复制'),
-    () => toast('复制失败，请手动选中', true));
-}
 
 function positiveText() {
   const a = $('outQuality').value.trim();
@@ -1076,6 +947,7 @@ async function sendToComfy() {
 async function loadStatus() {
   try {
     const st = await api('/api/status');
+    applyConstants(st.constants);
     const d = st.dict || {};
     $('dictStatus').textContent = '词表 ' + (d.count || 0).toLocaleString() + ' 条' +
       (d.updated ? ' · ' + d.updated : '');
@@ -1099,7 +971,10 @@ function loadRecord(item) {
   state.quality = (item.quality || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
   state.positive = (item.pos || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
   state.candidates = [];
-  state.negative = (item.neg || []).map(t => ({ tag: t, cn: '', category: 0, post_count: 0, weight: 1 }));
+  state.negText = item.negText || '';
+  state.negative = negChips(state.negText);
+  const cnMap = (APP_CONST && APP_CONST.tag_cn) || {};
+  state.negative.forEach(c => { c.cn = cnMap[c.tag] || TAG_CN_FALLBACK[c.tag] || ''; });
   state.trace = [];
   state.review = null;
   state.plan = null;
@@ -1137,10 +1012,14 @@ function init() {
   });
   $('btnFav').addEventListener('click', favCurrent);
   $('btnValidate').addEventListener('click', revalidate);
-  bindExamplePicker('btnExample', 'inputText', saveWork);
-  $('btnQualityPreset').addEventListener('click', () => addByNames(QUALITY_PRESET, 'pos'));
-  $('btnNegBase').addEventListener('click', () => addByNames(NEG_BASE, 'neg'));
-  $('btnNegAnatomy').addEventListener('click', () => addByNames(NEG_ANATOMY, 'neg'));
+  // tag 页用人物为主的示例池（适配纯动漫底模，且能命中人数/景别规则）
+  bindExamplePicker('btnExample', 'inputText', saveWork, EXAMPLE_PROMPTS_TAG);
+  $('btnQualityPreset').addEventListener('click', () => {
+    // 预设优先用服务端下发的质量词，本地 QUALITY_PRESET 只作离线兜底
+    const preset = (APP_CONST.quality && APP_CONST.quality.length)
+      ? APP_CONST.quality : QUALITY_PRESET;
+    addByNames(preset, 'pos');
+  });
   $('useWeight').addEventListener('change', () => { renderOut(); saveWork(); });
   $('btnCopyQuality').addEventListener('click', () => copy($('outQuality').value));
   $('btnCopyPos').addEventListener('click', () => copy($('outPos').value));
@@ -1149,7 +1028,18 @@ function init() {
   $('btnSendComfy').addEventListener('click', sendToComfy);
   $('outQuality').addEventListener('input', () => syncFromText('outQuality', 'quality'));
   $('outPos').addEventListener('input', () => syncFromText('outPos', 'positive'));
-  $('outNeg').addEventListener('input', () => syncFromText('outNeg', 'negative'));
+  $('outNeg').addEventListener('input', () => {
+    state.negText = $('outNeg').value;
+    const known = {};
+    (state.negative || []).forEach(c => { known[c.tag] = c.cn; });
+    state.negative = negChips(state.negText).map(c => {
+      if (!c.cn && known[c.tag]) c.cn = known[c.tag];
+      return c;
+    });
+    $('negCount').textContent = state.negative.length;
+    $('negTags').innerHTML = state.negative.map((c, i) => negChip(c, i)).join('');
+    bindTags();
+  });
 
   // 点模型切换器离开页面前，先把手头的东西落盘（防止最后几秒输入没保存）
   document.addEventListener('click', e => {

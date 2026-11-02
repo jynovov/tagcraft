@@ -1,7 +1,7 @@
 /* 各页共用：侧边栏、接口调用、提示、本地存储、质量词规则、预设、收藏、ComfyUI 配置 */
 
 /* 与后端 QUALITY_TAGS 保持一致：这些是模型侧美学词，不是 Danbooru tag */
-const QUALITY_TAGS = new Set([
+let QUALITY_TAGS = new Set([
   'masterpiece', 'best_quality', 'amazing_quality', 'high_quality', 'top_quality',
   'good_quality', 'normal_quality', 'worst_quality', 'low_quality', 'bad_quality',
   'very_aesthetic', 'aesthetic', 'best_aesthetic', 'good_aesthetic',
@@ -12,28 +12,16 @@ const QUALITY_TAGS = new Set([
 
 /* 一键预设：都核对过确实存在（质量词是模型美学词，不是 Danbooru tag） */
 const QUALITY_PRESET = ['masterpiece', 'best_quality', 'absurdres', 'very_aesthetic'];
-const NEG_BASE = ['worst_quality', 'low_quality', 'normal_quality', 'blurry',
-                  'jpeg_artifacts', 'watermark', 'signature', 'english_text'];
-const NEG_ANATOMY = ['extra_arms', 'extra_legs', 'extra_digits', 'fewer_digits',
-                     'extra_eyes', 'extra_ears', 'conjoined', 'long_neck',
-                     'multiple_views', 'bad_anatomy', 'bad_proportions', 'bad_hands',
-                     'bad_feet', 'disfigured', 'cropped', 'out_of_frame'];
-
 const LS_SETTINGS = 'tagcraft.settings';
 const LS_HISTORY = 'tagcraft.history';
 const LS_PROMPT = 'tagcraft.prompt';            // NoobAI 系的系统提示词
 const LS_PROMPT_KREA = 'tagcraft.prompt.krea';  // Krea 2 的系统提示词
 const LS_FAVS = 'tagcraft.favs';
 const LS_COMFY = 'tagcraft.comfy';
-const LS_PREFS = 'tagcraft.prefs';              // 已保存的偏好（数组）
-const LS_PREFS_ACTIVE = 'tagcraft.prefs.active'; // 当前生效那套的 id（单选）
-const LS_PREFS_ON = 'tagcraft.prefs.on';         // "1" / "0"，总开关
 const LS_PLAN = 'tagcraft.plan';                 // 规划展示开关："1" 开 / 其它（含未设置）关
-const PREFS_MAX = 20;   // 一套最多 20 个 tag（也是发给模型的硬上限）
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
-  pref: '<path d="M4 7h9M20 7h-3M4 12h3M20 12h-9M4 17h11M20 17h-1"/><circle cx="15.5" cy="7" r="2.1"/><circle cx="9.5" cy="12" r="2.1"/><circle cx="17.5" cy="17" r="2.1"/>',
   fav: '<path d="M12 3.4l2.7 5.4 6 .9-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.7l6-.9z"/>',
   his: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.1 2"/>',
   comfy: '<rect x="3.2" y="4.8" width="17.6" height="14.4" rx="2.2"/><circle cx="8.6" cy="10" r="1.6"/><path d="M4 17.2l5-4.6 3.4 3 3-2.6 4.6 4.2"/>',
@@ -41,11 +29,10 @@ const ICONS = {
   off: '<path d="M12 4v7.2"/><path d="M7.6 6.7a7 7 0 109.1.2"/>'
 };
 
-/** 渲染侧边栏；active: 'gen' | 'pref' | 'fav' | 'his' | 'comfy' | 'set' */
+/** 渲染侧边栏；active: 'gen' | 'fav' | 'his' | 'comfy' | 'set' */
 function renderSidebar(active) {
   const items = [
     { k: 'gen', href: '/', label: '生成' },
-    { k: 'pref', href: '/preferences.html', label: '偏好' },
     { k: 'fav', href: '/favorites.html', label: '收藏' },
     { k: 'his', href: '/history.html', label: '历史' },
     { k: 'comfy', href: '/comfy.html', label: 'ComfyUI' },
@@ -151,6 +138,19 @@ async function api(path, opts) {
 }
 
 let toastTimer = null;
+/* 服务端下发的常量（/api/status.constants）：质量词、负向、模板 tag 的中文名 */
+let APP_CONST = {
+  quality: [], quality_tags: [], negative: [], negative_text: '', tag_cn: {}, limits: {}
+};
+
+function applyConstants(c) {
+  if (!c || typeof c !== 'object') return;
+  APP_CONST = Object.assign(APP_CONST, c);
+  if (Array.isArray(c.quality_tags) && c.quality_tags.length) {
+    QUALITY_TAGS = new Set(c.quality_tags);
+  }
+}
+
 function toast(msg, bad) {
   let el = document.querySelector('.toast');
   if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
@@ -236,148 +236,6 @@ function loadComfy() {
 }
 function saveComfy(c) { localStorage.setItem(LS_COMFY, JSON.stringify(c)); }
 
-/* ---------------------------------------------------------------- 偏好
- * 一套「偏好」= 一组常驻 tag（固定画风、常用设定等）。生成时前端把当前那套
- * 随请求发出去，后端拼到 system prompt 末尾；只对 tag 模式生效，Krea 2 不追加。
- *
- *   tagcraft.prefs        [{id, name, tags:[字符串], updated}]  最多 40 套
- *   tagcraft.prefs.active 当前生效那套的 id（只有一个，单选）
- *   tagcraft.prefs.on     "1" / "0"；从未设置过时算开（有生效的那套才真的会发）
- */
-const PREFS_MAX_SETS = 40;
-
-/** 规整一组 tag：去空、去重（不分大小写）、空格换下划线、最多 PREFS_MAX 个 */
-function normalizePrefTags(tags) {
-  const out = [];
-  const seen = new Set();
-  for (const raw of (Array.isArray(tags) ? tags : [])) {
-    if (raw == null) continue;
-    const t = String(raw).trim().replace(/\s+/g, '_');
-    if (!t) continue;
-    const k = t.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(t);
-    if (out.length >= PREFS_MAX) break;
-  }
-  return out;
-}
-
-/** 只认白名单字段，坏数据一律丢掉 */
-function normalizePrefSet(x) {
-  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
-  const id = typeof x.id === 'string' ? x.id.trim() : '';
-  if (!id) return null;
-  const rawName = typeof x.name === 'string' ? x.name.trim() : '';
-  return {
-    id: id,
-    name: rawName ? rawName.slice(0, 30) : '未命名偏好',
-    tags: normalizePrefTags(x.tags),
-    updated: typeof x.updated === 'string' ? x.updated : ''
-  };
-}
-
-function loadPrefs() {
-  try {
-    const list = JSON.parse(localStorage.getItem(LS_PREFS) || '[]');
-    return (Array.isArray(list) ? list : [])
-      .map(normalizePrefSet).filter(Boolean).slice(0, PREFS_MAX_SETS);
-  } catch (e) { return []; }
-}
-
-/** 存回去；返回实际保存的（已规整 / 截断）列表 */
-function savePrefs(list) {
-  const clean = (Array.isArray(list) ? list : [])
-    .map(normalizePrefSet).filter(Boolean).slice(0, PREFS_MAX_SETS);
-  localStorage.setItem(LS_PREFS, JSON.stringify(clean));
-  return clean;
-}
-
-function newPrefId() {
-  return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
-
-/** 新建 / 覆盖一套；返回保存后的完整列表 */
-function upsertPrefs(set) {
-  const clean = normalizePrefSet(set);
-  const list = loadPrefs();
-  if (!clean) return list;
-  const i = list.findIndex(p => p.id === clean.id);
-  if (i >= 0) list[i] = clean; else list.unshift(clean);
-  return savePrefs(list);
-}
-
-/** 删除一套；删掉的正好是生效那套时，顺手把 active 清空 */
-function delPrefs(id) {
-  const list = savePrefs(loadPrefs().filter(p => p.id !== id));
-  if (loadPrefsActive() === String(id || '')) savePrefsActive('');
-  return list;
-}
-
-function loadPrefsActive() {
-  return String(localStorage.getItem(LS_PREFS_ACTIVE) || '').trim();
-}
-/** 设为当前生效；传空则取消选择。同一时间只留一个 id，天然单选 */
-function savePrefsActive(id) {
-  const key = String(id || '').trim();
-  if (!key) { localStorage.removeItem(LS_PREFS_ACTIVE); return ''; }
-  localStorage.setItem(LS_PREFS_ACTIVE, key);
-  return key;
-}
-
-/** 总开关；没设置过时算开（没有生效的偏好时本来也不会发任何东西） */
-function prefsOn() {
-  return localStorage.getItem(LS_PREFS_ON) !== '0';
-}
-function savePrefsOn(on) {
-  localStorage.setItem(LS_PREFS_ON, on ? '1' : '0');
-}
-
-/** 当前生效的那套；没选 / id 已经不存在时返回 null */
-function activePrefs() {
-  const id = loadPrefsActive();
-  if (!id) return null;
-  return loadPrefs().find(p => p.id === id) || null;
-}
-
-/** 生成请求里带的 prefs：开关关掉、或没有生效的那套时是空数组（最多 20 个） */
-function prefsTagsForRequest() {
-  if (!prefsOn()) return [];
-  const set = activePrefs();
-  return set ? set.tags.slice(0, PREFS_MAX) : [];
-}
-
-/** 从收藏与历史里找常用 tag：pos / quality 字段，出现 ≥ minCount 次，按次数取前 limit 个 */
-function prefCandidates(favs, history, minCount, limit) {
-  const min = Math.max(2, parseInt(minCount, 10) || 2);
-  const cap = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
-  const counts = new Map();   // 小写 key → {tag, count}
-  const eat = rows => {
-    for (const raw of (Array.isArray(rows) ? rows : [])) {
-      if (raw == null) continue;
-      const t = String(raw).trim();
-      if (!t) continue;
-      const k = t.toLowerCase();
-      const hit = counts.get(k);
-      if (hit) hit.count += 1;
-      else counts.set(k, { tag: t, count: 1 });
-    }
-  };
-  const scan = list => {
-    for (const rec of (Array.isArray(list) ? list : [])) {
-      if (!rec || typeof rec !== 'object') continue;
-      eat(rec.pos);
-      eat(rec.quality);
-    }
-  };
-  scan(favs);
-  scan(history);
-  return Array.from(counts.values())
-    .filter(c => c.count >= min)
-    .sort((a, b) => (b.count - a.count) ||
-      (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
-    .slice(0, cap);
-}
 
 function isQuality(chip) {
   return chip.category === 5 || chip.policy === 'quality' ||
@@ -420,8 +278,42 @@ function tidyResult(res) {
 
 /* ---------------------------------------------------------------- 示例提示
  * 输入框下方的「示例」按钮：随机抽 4 条中文描述，点一条直接填入。
- * 都是 SFW 的通用画面描述，两个生成页共用。                                */
-const EXAMPLE_PROMPTS = [
+ * 两个页面的示例池已经分开（都是 SFW）：
+ *   · EXAMPLE_PROMPTS_TAG  —— tag 页。适配纯动漫底模，所以全部以人物为主体，
+ *     每条都带人数线索（女生/少女/少年/两个…）和景别线索（半身/特写/全身/远景），
+ *     frame.py 的框架补全和 scoring.py 的规则评分才接得住；不放纯景和动物 ——
+ *     那类描述补不出人数 tag，coverage 直接打 0.6 折，必然卡在 95 分阈值下空转。
+ *   · EXAMPLE_PROMPTS_KREA —— krea 页（自然语言直出）：原来的 12 条原样保留，扩到 20 条，
+ *     纯景 / 静物 / 动物都可以有，krea 的评审不要求人数 tag。
+ * 写新示例的规矩：tag 池别写「中景」——_SHOT_RULES 里没有这个词，补不出景别。 */
+const EXAMPLE_PROMPTS_TAG = [
+  // —— 单人半身 / 特写（11 条）——
+  '白色背景，穿藏青水手服的黑发女生半身像，手扶领巾微微一笑，柔和顶光，浅景深',
+  '教室窗边，短发女生托腮看向窗外，午后阳光照亮侧脸，特写，背景虚化',
+  '雨夜街头，穿黑色风衣的长发女生撑着透明伞回眸，霓虹在脸上流动，半身',
+  '樱花树下，穿白裙的少女低头看掌心的花瓣，花瓣飘落，逆光，特写',
+  '卧室床上，穿宽大T恤的女生抱着枕头趴着打哈欠，晨光透过窗帘，全身',
+  '神社石阶上，穿巫女服的少女闭眼许愿，雪花落在肩上，暖色灯笼光，半身',
+  '咖啡店窗边，戴眼镜的男生低头看书，咖啡蒸汽缓缓上升，侧逆光，特写',
+  '天台上，穿校服的少女迎风挥手，夕阳把影子拉长，远处城市轮廓，全身',
+  '海边浅滩，穿泳装的女生回头笑着挥手，海风吹乱头发，逆光，半身',
+  '病房窗边，银发少女坐在轮椅上望着窗外，白光很冷，安静的侧脸，半身',
+  '深夜便利店门口，穿卫衣的少女蹲着逗一只三花猫，冷白灯管，特写',
+  // —— 双人 / 群像（4 条）——
+  '图书馆里，两个女生并肩趴在长桌上小声说话，阳光从书架缝隙落下，半身',
+  '放学走廊，男生和女生并肩走在窗边，女生侧头笑，男生抱着一摞书，全身',
+  '夏日祭摊位前，一群少女围着捞金鱼的水池，纸灯笼暖光，远景，热闹',
+  '屋顶天台，两个少女背靠背坐在水塔边看星星，城市灯火在远处，半身',
+  // —— 人小景大（2 条；人物明确在场，不写成纯景）——
+  '雪山脚下，穿红裙的少女站在雪地里张开双臂，雾凇与远山占满画面，远景，冷色调',
+  '暴雨的城市天桥，撑黑伞的少女独自站在栏杆边，下方车流拉成灯轨，远景，广角，冷色调',
+  // —— 强光影（3 条）——
+  '房间很昏暗，只有烛光照亮半边脸，穿睡裙的少女抱膝坐在床上，特写，高对比',
+  '荧光水族馆通道，戴帽子的女生抬头看水母，蓝绿光斑落在脸上，半身',
+  '黄昏的电车车厢，少年靠着车窗睡着，夕阳把座椅染成橙色，特写'
+];
+
+const EXAMPLE_PROMPTS_KREA = [
   '黄昏的海边，穿藏青色水手服的女生站在浅水里回头，海风吹起裙摆，逆光，远处有海鸥',
   '雨天的旧书店，短发女生坐在窗边翻书，玻璃上挂着水珠，暖黄台灯，背景书脊虚化',
   '夜晚霓虹街头，穿机能风外套的少年撑伞奔跑，积水倒影，广角低机位，电影感',
@@ -433,22 +325,35 @@ const EXAMPLE_PROMPTS = [
   '深夜的公交站，女生坐在长椅上低头看手机，站牌灯箱发白，远处车灯扫过，冷色调，中景',
   '雨夜的赛博朋克小巷，霓虹招牌倒映在积水里，穿透明雨衣的少女撑着发光伞，地面升起蒸汽，广角仰拍',
   '白色背景，一只橘猫趴在窗台上晒太阳，柔和自然光，特写，胶片颗粒',
-  '图书馆穹顶下，穿洛丽塔裙的少女踮脚取书，光柱穿过彩窗，尘埃漂浮，广角'
+  '图书馆穹顶下，穿洛丽塔裙的少女踮脚取书，光柱穿过彩窗，尘埃漂浮，广角',
+  // —— 以下 8 条是本次新增，延续 krea 页「场景 / 氛围优先」的老路子 ——
+  '深秋的山间公路，一辆旧面包车停在落叶里，晨雾未散，远处一排电线杆，胶片颗粒',
+  '老式火车站的月台，雨棚下灯光昏黄，一个提着行李箱的背影正要上车，蒸汽弥漫',
+  '废弃的巨大温室，玻璃穹顶破了一角，藤蔓爬满铁架，午后光柱穿过破洞，尘埃飞舞',
+  '改造成面馆的冷冻仓库，红灯笼挂在铁钩上，白汽把画面糊成一片暖白，嘈杂又暖',
+  '夏夜稻田边的堤坝，萤火虫绕着水渠飞，远处村庄只亮着一盏灯，蝉鸣',
+  '图书馆闭馆后的长桌，一本翻开的书被台灯照住，椅子歪着，窗外正在下雨',
+  '雪原上一座红色电话亭，积雪埋到一半，天空是干净的灰蓝色，极简构图',
+  '晨光里的老厨房，铝锅冒着白汽，窗台晾着两只碗，一只猫趴在门槛上打盹'
 ];
 
-/** 从示例池里随机抽 n 条（不重复） */
-function pickExamples(n) {
-  const pool = EXAMPLE_PROMPTS.slice();
+// 兼容：旧代码/测试里仍叫 EXAMPLE_PROMPTS 的，默认走 tag 页那套
+const EXAMPLE_PROMPTS = EXAMPLE_PROMPTS_TAG;
+
+/** 从指定示例池里随机抽 n 条（不重复）；不传池子就用 tag 页那套 */
+function pickExamples(n, pool) {
+  const src = Array.isArray(pool) && pool.length ? pool : EXAMPLE_PROMPTS;
+  const rest = src.slice();
   const out = [];
-  const want = Math.min(Math.max(0, n | 0), pool.length);
-  while (out.length < want && pool.length) {
-    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  const want = Math.min(Math.max(0, n | 0), rest.length);
+  while (out.length < want && rest.length) {
+    out.push(rest.splice(Math.floor(Math.random() * rest.length), 1)[0]);
   }
   return out;
 }
 
-/** 在按钮下方弹出示例菜单；点一条就交给 onPick */
-function showExampleMenu(btn, onPick) {
+/** 在按钮下方弹出示例菜单；点一条就交给 onPick。pool 决定用哪套示例 */
+function showExampleMenu(btn, onPick, pool) {
   document.querySelectorAll('.example-pop').forEach(p => p.remove());
   const pop = document.createElement('div');
   pop.className = 'pop example-pop';
@@ -456,7 +361,7 @@ function showExampleMenu(btn, onPick) {
   head.className = 'pop-head';
   head.textContent = '示例 · 点一条填入';
   pop.appendChild(head);
-  pickExamples(4).forEach(text => {
+  pickExamples(4, pool).forEach(text => {
     const b = document.createElement('button');
     b.textContent = text;
     b.addEventListener('click', () => {
@@ -478,8 +383,8 @@ function showExampleMenu(btn, onPick) {
   pop.style.left = Math.min(Math.max(8, r.left), window.innerWidth - pop.offsetWidth - 10) + 'px';
 }
 
-/** 给某个输入框绑定「示例」按钮 */
-function bindExamplePicker(btnId, inputId, onChange) {
+/** 给某个输入框绑定「示例」按钮；pool 不传就是 tag 页那套示例 */
+function bindExamplePicker(btnId, inputId, onChange, pool) {
   const btn = document.getElementById(btnId);
   const input = document.getElementById(inputId);
   if (!btn || !input) return;
@@ -490,7 +395,7 @@ function bindExamplePicker(btnId, inputId, onChange) {
       input.focus();
       if (onChange) onChange();
       toast('已填入示例');
-    });
+    }, pool);
   });
 }
 
@@ -678,4 +583,206 @@ function mergeFavorites(existing, incoming) {
   };
 }
 
+/* ================= 生成页 / Krea 页共用的渲染 ================= */
 
+/** 统一的 HTML 转义（两个页面原来各写一份） */
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/** 复制到剪贴板（两个页面原来各写一份） */
+function copy(value) {
+  if (!value) { toast('没有内容', true); return; }
+  navigator.clipboard.writeText(value).then(
+    () => toast('已复制'),
+    () => toast('复制失败，请手动选中', true));
+}
+
+/** 画面规划面板：tag 页带查词方向，Krea 页只有要素 */
+function renderPlanBox(plan, opt) {
+  const o = opt || {};
+  const box = $(o.box || 'planBox');
+  if (!box) return;
+  const body = $(o.body || 'plan');
+  const sum = $(o.sum || 'planSum');
+  const els = (plan && Array.isArray(plan.elements)) ? plan.elements : [];
+  const qs = (o.withQueries && plan && Array.isArray(plan.queries)) ? plan.queries : [];
+  if (!els.length && !qs.length) {
+    box.hidden = true;
+    body.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  sum.textContent = o.withQueries
+    ? ('画面规划 · ' + els.length + ' 个要素 · ' + qs.length + ' 个查词方向')
+    : ('画面规划 · ' + els.length + ' 个要素');
+  body.innerHTML =
+    (els.length
+      ? '<div class="step"><span class="tool">要素</span>' +
+        '<span class="sum">' + els.map(escHtml).join('、') + '</span></div>'
+      : '') +
+    (qs.length
+      ? '<div class="step"><span class="tool">查词</span>' +
+        '<span class="sum">' + qs.map(escHtml).join('、') + '</span></div>'
+      : '') + '';
+}
+
+/** 进度块：真实浏览器里 DOM 只建一次、原地更新（不闪）；测试桩退回字符串渲染 */
+function renderProgressBox(p, opt) {
+  const o = opt || {};
+  const box = $(o.box || 'progress');
+  
+  if (!p) {
+    box.classList.remove('show');
+    box.innerHTML = '';
+    box.dataset.ui = '';
+    return;
+  }
+  box.classList.add('show');
+  const interrupted = p.status === 'interrupted';
+  const finished = p.done && !interrupted;
+  const mode = interrupted ? 'retry' : 'normal';
+
+  const target = finished ? 100 : Math.max(0, Math.min(97, p.pct || 0));
+  const firstPaint = typeof p.shown !== 'number';
+  if (firstPaint) {
+    p.shown = target;                 // 第一次直接对齐真实值，别从 0 爬
+  } else {
+    const cap = finished ? 100 : Math.min(96.5, target + 6);
+    if (p.shown < target) {
+      p.shown = Math.min(target, p.shown + Math.max(0.4, (target - p.shown) * 0.15));
+    } else if (p.shown < cap) {
+      p.shown = Math.min(cap, p.shown + 0.12);   // 追平后慢慢爬，别停着不动
+    }
+  }
+  if (finished) p.shown = 100;
+
+  const width = interrupted ? Math.round(p.pct || 0) : Math.round(p.shown * 10) / 10;
+  const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
+  let headText;
+  if (interrupted) headText = '上次运行被中断';
+  else if (!p.done) headText = '智能体运行中… ' + Math.round(p.shown) + '% · 已用 ' + secs + ' 秒';
+  else if (p.status === 'error') headText = '运行失败 · 用时 ' + secs + ' 秒';
+  else headText = '完成 · 用时 ' + secs + ' 秒';
+
+  // 先建结构（只建一次）
+  if (box.dataset.ui !== mode) {
+    box.dataset.ui = mode;
+    box.innerHTML =
+      '<div class="progress-head"><span class="spin"></span><span class="phead"></span></div>' +
+      '<div class="pbar"><div class="pbar-fill" style="width:0%"></div></div>' +
+      '<div class="pmsg"></div>' +
+      (interrupted
+        ? '<div class="retry-row"><button class="small" id="btnRetryJob">重试</button>' +
+          '<span>用上次的描述和参数重新跑一遍</span></div>'
+        : '');
+    if (interrupted) {
+      const b = box.querySelector('#btnRetryJob');
+      if (b) b.addEventListener('click', () => o.onRetry && o.onRetry(p.jobId, b));
+    }
+  }
+
+  const headEl = box.querySelector('.phead');
+  const spin = box.querySelector('.spin');
+  const bar = box.querySelector('.pbar');
+  const fill = box.querySelector('.pbar-fill');
+
+  if (headEl && fill && bar) {
+    // 真实 DOM：原地改，不动其它元素（spinner 动画不会重开）
+    if (typeof fill.style !== 'object' || !fill.style) fill.style = {};
+    fill.style.width = width + '%';
+    if (bar.classList) bar.classList.toggle('done', finished);
+    if (spin && spin.style) spin.style.display = (finished || interrupted) ? 'none' : '';
+    headEl.textContent = headText;
+    const msg = box.querySelector('.pmsg');
+    if (msg) msg.textContent = p.msg || '';
+    return;
+  }
+
+  // 测试桩（没有 querySelector 支持）：退回字符串渲染
+  box.innerHTML =
+    '<div class="progress-head">' + (finished || interrupted ? '' : '<span class="spin"></span>') +
+      headText + '</div>' +
+    '<div class="pbar' + (finished ? ' done' : '') + '">' +
+    '<div class="pbar-fill" style="width:' + width + '%"></div></div>' +
+    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>' +
+    (interrupted
+      ? '<div class="retry-row"><button class="small" id="btnRetryJob">重试</button>' +
+        '<span>用上次的描述和参数重新跑一遍</span></div>'
+      : '');
+}
+
+/** 结构校验 / 自省评审面板（两个页面共用）；标题、措辞、是否显示候选由参数决定 */
+function renderReviewBox(rv, opt) {
+  const o = opt || {};
+  const box = $(o.box || 'reviewBox');
+  const body = $(o.body || 'review');
+  const sum = $(o.sum || 'reviewSum');
+  if (!rv) { box.hidden = true; body.innerHTML = ''; return; }
+  box.hidden = false;
+  const rounds = rv.rounds || [];
+  const title = o.title || '自省评审';
+  const picked = (rv.picked_round && rv.final_score != null)
+    ? ' · 采用第 ' + rv.picked_round + ' 轮（' + rv.final_score + ' 分）'
+    : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
+  const candN = rv.candidates || (state.candidates || []).length;
+  const candSum = (o.showCandidates !== false && candN) ? (' · 候选补充 ' + candN + ' 个') : '';
+  sum.textContent = rv.error
+    ? title + ' · 未完成（点开可重试）'
+    : title + ' · ' + rounds.length + ' 轮' + picked + candSum;
+  if (rv.error) {
+    body.innerHTML =
+      '<div class="step"><span class="tool">提示</span><span class="sum">' +
+      escHtml(o.incompleteText || (title + '没跑完，上面的结果可以先直接用。')) + '</span></div>' +
+      '<div class="step warn">' + escHtml(rv.error) + '</div>' +
+      '<div class="step"><button class="small" id="btnRetryReflect">' +
+      escHtml(o.retryLabel || '重试') + '</button>' +
+      '<span class="sum">' + escHtml(o.retryHint || '只重跑评审') + '</span></div>';
+    const b = body.querySelector('#btnRetryReflect');
+    if (b) b.addEventListener('click', () => { if (o.onRetry) o.onRetry(); });
+    return;
+  }
+  const unit = o.unit || '处';
+  body.innerHTML = rounds.map((r, i) => {
+    const prev = i > 0 ? rounds[i - 1].score : null;
+    const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
+    const probs = (r.problems || []).length
+      ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
+    const miss = (r.missing || []).length
+      ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
+    const dims = reviewDimLine(r.dimensions);
+    const candLine = (o.showCandidates !== false && r.candidates)
+      ? ' · 候选补充 ' + r.candidates + ' 个' : '';
+    return `<div class="step">
+        <span class="rnd">${i + 1}</span>
+        <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
+        <span class="sum">改动 ${r.changed || 0} ${unit}${candLine}${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
+        ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
+        ${dims ? '<div class="dims">' + dims + '</div>' : ''}
+        ${probs}${miss}
+      </div>`;
+  }).join('') + (() => {
+    if (rounds.some(r => reviewDimLine(r.dimensions))) return '';
+    const line = reviewDimLine(rv.final_dims);
+    return line ? '<div class="step"><span class="rnd">·</span>' +
+      '<span class="sum">采用轮分项</span><div class="dims">' + line + '</div></div>' : '';
+  })();
+}
+
+/** 轨迹面板（两个页面共用）；tag 页额外传一段「概念核对」摘要 */
+function renderTraceBox(trace, opt) {
+  const o = opt || {};
+  const tr = trace || [];
+  const box = $(o.box || 'traceBox');
+  const body = $(o.body || 'trace');
+  const sum = $(o.sum || 'traceSum');
+  const extra = o.extraHtml || '';
+  if (!tr.length && !extra) { box.hidden = true; body.innerHTML = ''; return; }
+  box.hidden = false;
+  sum.textContent = (o.label || '生成轨迹') + ' · ' + tr.length + ' 步';
+  body.innerHTML = extra + tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
+      <span class="rnd">${s.round}</span>
+      <span class="tool">${s.tool}</span>
+      <span class="sum">${escHtml(s.summary || '')}</span>
+    </div>`).join('');
+}

@@ -25,9 +25,6 @@ let saved = null;   // 上次状态的内存镜像（render 时同步）
 let pollTimer = null;
 let tickTimer = null;
 
-function escHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
 
 /* ---------------------------------------------------------------- 上次状态 */
 
@@ -145,6 +142,11 @@ function wordCount(text) {
   return (String(text || '').match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
 }
 
+/** 规划面板：实现挪到了 common.js，这里只传本页需要的参数 */
+function renderPlan() {
+  renderPlanBox(state.plan, { withQueries: false });
+}
+
 function render() {
   $('outPrompt').value = state.prompt || '';
   const words = wordCount(state.prompt);
@@ -183,89 +185,20 @@ function render() {
 }
 
 /* 画面规划：轨迹区最上方单独一块，可折叠（默认展开）；只做展示 */
-function renderPlan() {
-  const p = state.plan;
-  const box = $('planBox');
-  if (!box) return;
-  const els = (p && Array.isArray(p.elements)) ? p.elements : [];
-  if (!els.length) {
-    box.hidden = true;
-    $('plan').innerHTML = '';
-    return;
-  }
-  box.hidden = false;
-  $('planSum').textContent = '画面规划 · ' + els.length + ' 个要素';
-  $('plan').innerHTML =
-    (els.length
-      ? '<div class="step"><span class="tool">要素</span>' +
-        '<span class="sum">' + els.map(escHtml).join('、') + '</span></div>'
-      : '') +
-    '<div class="step"><span class="sum">计划只做展示</span></div>';
-}
 
+/** 轨迹面板：实现挪到 common.js */
 function renderTrace() {
-  const tr = state.trace || [];
-  const box = $('traceBox');
-  if (!tr.length) {
-    box.hidden = true;
-    $('trace').innerHTML = '';
-    return;
-  }
-  box.hidden = false;
-  $('traceSum').textContent = '生成轨迹 · ' + tr.length + ' 步';
-  $('trace').innerHTML = tr.map(s => `<div class="step ${s.tool === '降级' || s.tool === '计划' ? 'warn' : ''}">
-      <span class="rnd">${s.round}</span>
-      <span class="tool">${s.tool}</span>
-      <span class="sum">${escHtml(s.summary || '')}</span>
-    </div>`).join('');
+  renderTraceBox(state.trace, { label: '生成轨迹' });
 }
 
+/** 自省评审面板：实现挪到 common.js */
 function renderReview() {
-  const rv = state.review;
-  const box = $('reviewBox');
-  if (!rv) { box.hidden = true; $('review').innerHTML = ''; return; }
-  box.hidden = false;
-  const rounds = rv.rounds || [];
-  const picked = (rv.picked_round && rv.final_score != null)
-    ? ' · 采用第 ' + rv.picked_round + ' 轮（' + rv.final_score + ' 分）'
-    : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
-  $('reviewSum').textContent = rv.error
-    ? '自省评审 · 未完成（点开可重试）'
-    : '自省评审 · ' + rounds.length + ' 轮' + picked;
-  if (rv.error) {
-    $('review').innerHTML =
-      '<div class="step"><span class="tool">提示</span><span class="sum">' +
-      '自省这一步没跑完，上面的提示词是好的，可以直接用。</span></div>' +
-      '<div class="step warn">' + escHtml(rv.error) + '</div>' +
-      '<div class="step"><button class="small" id="btnRetryReflect">重试自省</button>' +
-      '<span class="sum">只重跑评审，不会改动已生成的提示词</span></div>';
-    const b = $('review').querySelector('#btnRetryReflect');
-    if (b) b.addEventListener('click', retryReflect);
-    return;
-  }
-  $('review').innerHTML = rounds.map((r, i) => {
-    const prev = i > 0 ? rounds[i - 1].score : null;
-    const delta = (r.score != null && prev != null) ? (r.score - prev) : null;
-    const probs = (r.problems || []).length
-      ? '<div class="prob">发现：' + r.problems.join('；') + '</div>' : '';
-    const miss = (r.missing || []).length
-      ? '<div class="prob">遗漏：' + r.missing.join('；') + '</div>' : '';
-    const dims = reviewDimLine(r.dimensions);
-    return `<div class="step">
-        <span class="rnd">${i + 1}</span>
-        <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
-        <span class="sum">改动 ${r.changed || 0} 处${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
-        ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
-        ${dims ? '<div class="dims">' + dims + '</div>' : ''}
-        ${probs}${miss}
-      </div>`;
-  }).join('') + (() => {
-    // 老记录或评审没给分项时，兜底用最终采用那轮的分项（服务端 final_dims）
-    if (rounds.some(r => reviewDimLine(r.dimensions))) return '';
-    const line = reviewDimLine(rv.final_dims);
-    return line ? '<div class="step"><span class="rnd">·</span>' +
-      '<span class="sum">采用轮分项</span><div class="dims">' + line + '</div></div>' : '';
-  })();
+  renderReviewBox(state.review, {
+    title: '自省评审', unit: '处', showCandidates: false,
+    incompleteText: '自省这一步没跑完，上面的提示词是好的，可以直接用。',
+    retryLabel: '重试自省', retryHint: '只重跑评审，不会改动已生成的提示词',
+    onRetry: () => retryReflect()
+  });
 }
 
 /* ---------------------------------------------------------------- 生成 */
@@ -307,15 +240,26 @@ async function generate() {
   btn.disabled = true;
   btn.textContent = '生成中…';
 
-  const t0 = Date.now();
   toast('正在生成…');
   try {
-    // 走 /api/agent：Krea 2 已经没有工具，但自省开关需要 review 结果；
-    // reflect=false 时后端只跑一次生成、不评审。
+    // 走后台任务：和 tag 页一样能看进度、不怕请求超时
     const r = await api('/api/agent', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(Object.assign({}, body, { async: true }))
     });
+    if (r.job_id) {
+      sessionStorage.setItem(LS_JOB, r.job_id);
+      state.progress = { pct: 2, msg: '任务已提交，等待模型响应',
+                         startedAt: Date.now(), status: 'running', done: false };
+      state.plan = null;
+      state.trace = [];
+      state.review = null;
+      render();
+      startTick();
+      pollJob(r.job_id, btn);
+      return;
+    }
+    // 老服务没返回任务号：退回同步处理
     if (r.error && !r.prompt) {
       toast(r.error, true);
       state.notes = r.raw ? '模型原文：' + String(r.raw).slice(0, 300) : '';
@@ -323,7 +267,7 @@ async function generate() {
       render();
       return;
     }
-    finishGenerate(r, Date.now() - t0);
+    finishGenerate(r, 0);
     toast('完成：' + state.stats.words + ' 词');
     render();
     pushHistory(text);
@@ -343,6 +287,7 @@ async function pollJob(jid, btn) {
     state.progress = { pct: j.pct || 0, msg: j.msg || '', status: j.status,
                        startedAt: prev.startedAt || Date.now(), shown: prev.shown,
                        done: j.status !== 'running' };
+    if (j.plan) state.plan = j.plan;   // 规划先到先显示，不等整条跑完
     if (j.status === 'running') {
       render();
       pollTimer = setTimeout(() => pollJob(jid, btn), 400);
@@ -375,11 +320,8 @@ async function pollJob(jid, btn) {
     const ms = Date.now() - (state.progress.startedAt || Date.now());
     state.progress.done = true;
     finishGenerate(res, ms);
-    if (res.tools_used === false) {
-      toast('该接口不支持工具调用，已降级为单次生成', true);
-    } else {
-      toast('完成：' + state.stats.words + ' 词 · 用时 ' + (ms / 1000).toFixed(1) + ' 秒');
-    }
+    // Krea 2 本来就不带工具，tools_used 恒为 false，这里不再提示“降级”
+    toast('完成：' + state.stats.words + ' 词 · 用时 ' + (ms / 1000).toFixed(1) + ' 秒');
     render();
     pushHistory(state.lastText || $('inputText').value);
     setTimeout(hideProgressLater, 4000);
@@ -483,7 +425,7 @@ function startTick() {
   tickTimer = setInterval(() => {
     if (state.progress && !state.progress.done) renderProgress();
     else stopTick();
-  }, 400);
+  }, 100);
 }
 
 function stopTick() {
@@ -491,55 +433,12 @@ function stopTick() {
   tickTimer = null;
 }
 
+/** 只重画进度块：DOM 只建一次，之后原地更新宽度和文字（避免每帧重建导致闪变） */
+/** 进度条：实现挪到 common.js */
 function renderProgress() {
-  const box = $('progress');
-  const p = state.progress;
-  if (!p) {
-    box.classList.remove('show');
-    box.innerHTML = '';
-    return;
-  }
-  box.classList.add('show');
-  const secs = ((Date.now() - p.startedAt) / 1000).toFixed(0);
-  const interrupted = p.status === 'interrupted';
-  const finished = p.done && !interrupted;
-  const target = finished ? 100 : Math.max(0, Math.min(97, p.pct || 0));
-  if (typeof p.shown !== 'number') p.shown = target;
-  const cap = finished ? 100 : Math.min(96.5, target + 6);
-  if (p.shown < target) {
-    p.shown = Math.min(target, p.shown + Math.max(0.5, (target - p.shown) * 0.3));
-  } else if (p.shown < cap) {
-    p.shown = Math.min(cap, p.shown + 0.25);
-  }
-  if (finished) p.shown = 100;
-  const pct = Math.round(p.shown);
-  // 中断的任务保留停住时的进度，不假装跑完了
-  const width = interrupted ? Math.round(p.pct || 0) : (finished ? 100 : pct);
-
-  let head;
-  if (interrupted) {
-    head = '上次运行被中断';
-  } else if (!p.done) {
-    head = '<span class="spin"></span>智能体运行中… ' + pct + '% · 已用 ' + secs + ' 秒';
-  } else if (p.status === 'error') {
-    head = '运行失败 · 用时 ' + secs + ' 秒';
-  } else {
-    head = '完成 · 用时 ' + secs + ' 秒';
-  }
-  box.innerHTML =
-    '<div class="progress-head">' + head + '</div>' +
-    '<div class="pbar' + (finished ? ' done' : '') + '">' +
-    '<div class="pbar-fill" style="width:' + width + '%"></div></div>' +
-    '<div class="pmsg">' + escHtml(p.msg || '') + '</div>' +
-    (interrupted
-      ? '<div class="retry-row"><button class="small" id="btnRetryJob">重试</button>' +
-        '<span>用上次的描述和参数重新跑一遍</span></div>'
-      : '');
-  if (interrupted) {
-    const b = box.querySelector('#btnRetryJob');
-    if (b) b.addEventListener('click', () => retryJob(p.jobId, b));
-  }
+  renderProgressBox(state.progress, { onRetry: (id, btn) => retryJob(id, btn) });
 }
+
 
 function pushHistory(text) {
   const list = loadHistory();
@@ -609,12 +508,6 @@ function favCurrent() {
   toast('已收藏「' + item.title + '」（共 ' + n + ' 条）');
 }
 
-function copy(value) {
-  if (!value) { toast('没有内容', true); return; }
-  navigator.clipboard.writeText(value).then(
-    () => toast('已复制'),
-    () => toast('复制失败，请手动选中', true));
-}
 
 async function sendToComfy() {
   const cfg = loadComfy();
@@ -669,6 +562,7 @@ function loadRecord(item) {
 async function loadStatus() {
   try {
     const st = await api('/api/status');
+    applyConstants(st.constants);
     const d = st.dict || {};
     $('kreaStatus').textContent = 'Krea 2 · 英文自然语言';
     $('kreaStatus').title = d.source || '';
@@ -701,7 +595,8 @@ function init() {
 
   $('btnFav').addEventListener('click', favCurrent);
   $('btnCopyPrompt').addEventListener('click', () => copy($('outPrompt').value));
-  bindExamplePicker('btnExample', 'inputText', saveWork);
+  // krea 页用自己的示例池：场景 / 氛围优先，不要求有人物
+  bindExamplePicker('btnExample', 'inputText', saveWork, EXAMPLE_PROMPTS_KREA);
   $('btnSendComfy').addEventListener('click', sendToComfy);
 
   $('outPrompt').addEventListener('input', () => {
