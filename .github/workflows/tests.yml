@@ -1,0 +1,47 @@
+name: tests
+
+# 为什么只有一部分套件：仓库里不存 55MB 的词表（data/dict.sqlite，.gitignore 排除），
+# 依赖词表的套件（concept / plan / whitelist / agent 这些）在 CI 里跑不起来。
+# 这里跑的是「不依赖词表」的那部分：语法检查、5 套前端 DOM、大模型重试逻辑。
+# 本地全量请用：pwsh tests/run_all.ps1
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 语法编译检查（全部 .py）
+        run: python -m compileall -q .
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: 前端 DOM 套件
+        run: |
+          for f in tests/ui_test.js tests/ui_krea_test.js tests/ui_plan_test.js tests/ui_favorites_test.js tests/ui_job_test.js; do
+            echo "=== $f ==="
+            node "$f" || exit 1
+          done
+
+  llm-retry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 大模型调用的重试 / 截断兜底
+        run: python tests/llm_retry_test.py
