@@ -728,9 +728,12 @@ function renderReviewBox(rv, opt) {
     : (rv.final_score != null ? ' · 最终 ' + rv.final_score + ' 分' : '');
   const candN = rv.candidates || (state.candidates || []).length;
   const candSum = (o.showCandidates !== false && candN) ? (' · 候选补充 ' + candN + ' 个') : '';
+  // 采纳门槛：覆盖/有效/排序 三项都 5/5 才算达标；没达标时用的是「最高分」兜底
+  const gateSum = rv.gate === true ? ' · 达标'
+    : (rv.gate === false ? ' · 未达标（取最高分）' : '');
   sum.textContent = rv.error
     ? title + ' · 未完成（点开可重试）'
-    : title + ' · ' + rounds.length + ' 轮' + picked + candSum;
+    : title + ' · ' + rounds.length + ' 轮' + picked + gateSum + candSum;
   if (rv.error) {
     body.innerHTML =
       '<div class="step"><span class="tool">提示</span><span class="sum">' +
@@ -754,9 +757,15 @@ function renderReviewBox(rv, opt) {
     const dims = reviewDimLine(r.dimensions);
     const candLine = (o.showCandidates !== false && r.candidates)
       ? ' · 候选补充 ' + r.candidates + ' 个' : '';
+    // 每轮都标达标/未达标：这样同一个分数（比如都是 96）也能看出结构差别
+    const gateBadge = (typeof r.gate === 'boolean')
+      ? '<span class="gate ' + (r.gate ? 'ok' : 'no') + '">' +
+        (r.gate ? '达标' : '未达标') + '</span>'
+      : '';
     return `<div class="step">
         <span class="rnd">${i + 1}</span>
         <span class="tool">${r.score != null ? r.score + ' 分' : '—'}</span>
+        ${gateBadge}
         <span class="sum">改动 ${r.changed || 0} ${unit}${candLine}${delta != null ? '（' + (delta >= 0 ? '+' : '') + delta + '）' : ''}</span>
         ${rv.picked_round === i + 1 ? '<span class="pick">采用</span>' : ''}
         ${dims ? '<div class="dims">' + dims + '</div>' : ''}

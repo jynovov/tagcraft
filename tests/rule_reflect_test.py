@@ -191,6 +191,69 @@ def main():
     check("两轮都留了分数", len(rv3["rounds"]) == 2,
           str([r["score"] for r in rv3["rounds"]]))
 
+    print("== 到阈值（95）就停：96 分不再多修一轮")
+    # 15 个 tag、两对近义重复 → 96 分，但 problems 不为空。
+    # 修复前这段逻辑只认「满分 100」和「没有问题」，96 分会白跑一轮修复。
+    high = hits("1girl", "solo", "upper_body", "long_hair", "black_hair", "blue_eyes",
+                "smile", "school_uniform", "white_thighhighs", "thighhighs",
+                "black_thighhighs", "pleated_skirt", "holding_book", "classroom", "window")
+    fake_h = FakePost([])   # 期望一次都不调；真调了会直接报错，正好当断言
+    old = agent_core._post_chat
+    agent_core._post_chat = fake_h
+    try:
+        result = {"positive": agent_core.reorder_hits(high), "positive_unknown": [],
+                  "stats": {"llm_calls": 0}, "positive_candidates": []}
+        rv_h = agent_core.self_refine_rules({"model": "mock"}, "一个女生站在窗边",
+                                           result, rounds=3)
+    finally:
+        agent_core._post_chat = old
+    check("96 分一次修复都不调", len(fake_h.payloads) == 0, str(len(fake_h.payloads)))
+    check("96 分只留一轮记录", len(rv_h["rounds"]) == 1, str(len(rv_h["rounds"])))
+    check("96 分结果照常采纳", rv_h["final_score"] == 96, str(rv_h["final_score"]))
+
+    print("== 采纳门槛：覆盖 / 有效 / 排序 必须 5/5")
+    clean = ["1girl", "solo", "upper_body", "long_hair", "black_hair", "blue_eyes", "smile",
+             "school_uniform", "pleated_skirt", "holding_book", "classroom", "window",
+             "day", "sunlight", "desk"]
+    # 首评：15 个 tag + 1 个未识别 → 95 分，但「有效」只有 4/5 → 不算达标，必须继续修
+    fake_g = FakePost([json.dumps({"positive": clean})])
+    old = agent_core._post_chat
+    agent_core._post_chat = fake_g
+    try:
+        result = {"positive": agent_core.reorder_hits(hits(*clean)),
+                  "positive_unknown": [{"tag": "zzz_fake"}],
+                  "stats": {"llm_calls": 0}, "positive_candidates": []}
+        rv_g = agent_core.self_refine_rules({"model": "mock"}, "一个女生站在窗边",
+                                            result, rounds=2)
+    finally:
+        agent_core._post_chat = old
+    check("95 分但有效 4/5 → 不收敛（修了 1 轮）",
+          len(fake_g.payloads) == 1, str(len(fake_g.payloads)))
+    check("修完达标 → 采纳第 2 轮 100 分",
+          rv_g["final_score"] == 100 and rv_g["picked_round"] == 2,
+          "%s 分 / 第 %s 轮" % (rv_g["final_score"], rv_g["picked_round"]))
+    check("每轮都记了 gate 标记", [r.get("gate") for r in rv_g["rounds"]] == [False, True],
+          str([r.get("gate") for r in rv_g["rounds"]]))
+    check("返回的 gate 为 True", rv_g.get("gate") is True)
+
+    print("== 都不达标时取最高分、有达标的就优先达标那轮")
+    # 首评 95 分母但有效 4/5；修复后 10 个 tag → 91 分但三项 5/5（约束 2/5 不卡采纳）
+    fewer = clean[:10]
+    fake_b = FakePost([json.dumps({"positive": fewer})])
+    old = agent_core._post_chat
+    agent_core._post_chat = fake_b
+    try:
+        result = {"positive": agent_core.reorder_hits(hits(*clean)),
+                  "positive_unknown": [{"tag": "zzz_fake"}],
+                  "stats": {"llm_calls": 0}, "positive_candidates": []}
+        rv_b = agent_core.self_refine_rules({"model": "mock"}, "一个女生站在窗边",
+                                            result, rounds=2)
+    finally:
+        agent_core._post_chat = old
+    check("采纳了达标但分更低的那轮", rv_b["final_score"] == 91 and rv_b["picked_round"] == 2,
+          "%s 分 / 第 %s 轮" % (rv_b["final_score"], rv_b["picked_round"]))
+    check("这轮的 gate 是 True", rv_b.get("gate") is True)
+
     same = json.dumps({"positive": ["long_hair"]})
     fake4 = FakePost([same, same, same])
     old = agent_core._post_chat

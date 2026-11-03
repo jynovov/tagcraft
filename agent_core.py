@@ -42,6 +42,21 @@ _POOL_PROMPT_MAX = 40
 # 新一轮分数相对「当前最高分」涨不到 3 分就停止后续改写，避免越改越低。
 # 首次评审还没有最高分，不触发；负增长同样按这条停（best 不变）。
 _REFLECT_MIN_GAIN = 3
+# 结构校验的收敛阈值：达到这个分数就不再修（设置页文案、/api/status 都用这个数）。
+# 以前 tag 模式只认「满分 100」和「没有问题」，90 多分时还会白跑一轮修复。
+_REFLECT_THRESHOLD = 95
+# 采纳门槛：这三项是结构性的硬指标，必须 5/5 才允许「收敛并采纳」。
+# 冗余（近义堆叠）和约束（个数）只影响观感，不卡采纳 —— 否则 96 分也会被卡住。
+_GATE_DIMS = ("coverage", "validity", "ordering")
+
+
+def _gate_ok(dims):
+    """三项硬指标是否都是满分。dims 缺失/异常一律按不达标处理。"""
+    d = dims or {}
+    try:
+        return all(int(d.get(k) or 0) >= 5 for k in _GATE_DIMS)
+    except (TypeError, ValueError):
+        return False
 # 评审 / 改写轮统一用低温，减少「重写后变差」；生成轮的温度不受影响。
 _REFLECT_TEMPERATURE = 0.25
 
@@ -629,7 +644,7 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
                 pool_tags = []
         try:
             out["review"] = self_refine_rules(
-                cfg, text, out, rounds=reflect_rounds, threshold=95, progress=say,
+                cfg, text, out, rounds=reflect_rounds, threshold=_REFLECT_THRESHOLD, progress=say,
                 pool=pool_tags, concept_map=concept_map, max_tags=max_tags)
             # 自省后重新校验一遍
             pos2 = [h["tag"] for h in out["positive"]]
@@ -1017,12 +1032,20 @@ from scoring import (KREA_DIM_WEIGHTS, TAG_DIM_WEIGHTS, _clamp_dim,  # noqa: E40
                      rule_score)
 
 
-def self_refine_rules(cfg, text, result, rounds=2, threshold=95, progress=None,
+def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD, progress=None,
                       pool=None, concept_map=None, max_tags=45):
     """规则自省：先本地打分，规则没过就修，最多修 rounds 轮。
 
-    停止条件（任一满足就停）：分数到 100、这一轮没提升、修满 rounds 轮。
-    rounds 来自设置页「自省轮数」，0 表示不修。每轮都记分数。
+    收敛条件：分数 >= threshold **且** 覆盖/有效/排序三项都是 5/5（采纳门槛）。
+    光有分数不够 —— 96 分但覆盖 4/5（漏了要素）也会继续修，因为"分数高但结构
+    不全"跟"真达标"在界面上必须能分开。
+
+    停止条件（任一满足就停）：
+        · 分数达标门槛（见上）
+        · 这一轮分数没提升（回滚到达标的最好那轮；没有达标的就回滚到最高分那轮）
+        · 修满 rounds 轮
+    采纳顺序：达标的轮次里取最高分；一轮都没达标 → 取最高分那一轮。
+    rounds 来自设置页「自省轮数」，0 表示不修。每轮都记分数与 gate 标记。
     """
     def say(msg, pct=None):
         if progress:
@@ -1041,22 +1064,27 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=95, progress=None,
     history = []
     say("结构校验：本地打分中…", 66)
     score, dims, problems = evaluate()
-    history.append({"round": 1, "score": score, "dimensions": dims,
+    gate = _gate_ok(dims)
+    history.append({"round": 1, "score": score, "dimensions": dims, "gate": gate,
                     "problems": problems, "missing": [], "changed": 0,
                     "candidates": 0, "add_concepts": []})
-    best = {"score": score, "round": 1, "dimensions": dims,
-            "positive": result["positive"]}
+    best_any = {"score": score, "round": 1, "dimensions": dims,
+                "positive": result["positive"], "gate": gate}
+    best_gate = dict(best_any) if gate else None
 
-    if score >= 100:
-        say("结构校验通过（100 分）", 95)
+    if score >= threshold and gate:
+        # 到阈值 + 三项硬指标 5/5 才算收敛；分数够但覆盖/有效/排序不满分的，
+        # 继续修（"分数高但结构不全"不该被当成好结果采纳）
+        say("结构校验通过：%d 分（覆盖/有效/排序 5/5，阈值 %d）"
+            % (score, int(threshold)), 95)
         return {"rounds": history, "final_score": score, "final_dims": dims,
                 "picked_round": 1, "candidates": len(result.get("positive_candidates") or []),
-                "iterations": 1, "mode": "rules"}
+                "iterations": 1, "mode": "rules", "gate": True}
     if not problems:
         say("结构校验通过：%d 分" % score, 95)
         return {"rounds": history, "final_score": score, "final_dims": dims,
                 "picked_round": 1, "candidates": len(result.get("positive_candidates") or []),
-                "iterations": 1, "mode": "rules"}
+                "iterations": 1, "mode": "rules", "gate": gate}
 
     # 规则没过：最多修 rounds 轮，中途「没提升」或「满分」都会提前停
     max_repairs = max(0, int(rounds))
@@ -1094,31 +1122,48 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=95, progress=None,
         result["positive"] = reorder_hits(result["positive"])
 
         score2, dims2, problems2 = evaluate()
+        gate2 = _gate_ok(dims2)
         changed = len(set(cur) ^ {h["tag"] for h in result["positive"]})
-        history.append({"round": rnd, "score": score2, "dimensions": dims2,
+        history.append({"round": rnd, "score": score2, "dimensions": dims2, "gate": gate2,
                         "problems": problems2, "missing": [], "changed": changed,
                         "candidates": len(result.get("positive_candidates") or []),
                         "add_concepts": []})
 
+        # 先记账再判断要不要停：达标的轮次要被记住，哪怕它分数比上一轮低
+        # （用户的要求是「有达标的就采纳达标的，都没有才退回最高分」）
+        cur_round = {"score": score2, "round": rnd, "dimensions": dims2,
+                     "positive": result["positive"], "gate": gate2}
+        if score2 > best_any["score"]:
+            best_any = cur_round
+        if gate2 and (best_gate is None or score2 > best_gate["score"]):
+            best_gate = cur_round
+
         if score2 <= score:
-            # 分数没提升（或反而降了）：回到最好那轮，结束
-            result["positive"] = best["positive"]
-            say("第 %d 轮没提升（%d→%d），回到 %d 分那轮并结束"
-                % (rnd - 1, score, score2, best["score"]), 95)
+            # 分数没提升（或反而降了）：回到「达标的最好那轮」，没有达标的就回最高分
+            pick = best_gate or best_any
+            result["positive"] = pick["positive"]
+            say("第 %d 轮没提升（%d→%d），回到第 %d 轮（%d 分，%s）并结束"
+                % (rnd - 1, score, score2, pick["round"], pick["score"],
+                   "达标" if pick["gate"] else "未达标"), 95)
             break
 
         score, dims, problems = score2, dims2, problems2
-        best = {"score": score, "round": rnd, "dimensions": dims,
-                "positive": result["positive"]}
-        if score >= 100:
-            say("满分 100，自省立即结束", 95)
+        if score >= threshold and gate2:
+            say("分数达到阈值 %d 且覆盖/有效/排序 5/5（%d 分），自省收敛"
+                % (int(threshold), score), 95)
             break
 
-    say("结构校验完成：%d 分（第 %d 轮）" % (best["score"], best["round"]), 95)
-    return {"rounds": history, "final_score": best["score"],
-            "final_dims": best["dimensions"], "picked_round": best["round"],
+    # 采纳顺序：先看有没有达标的（覆盖/有效/排序 5/5），在达标的里取最高分；
+    # 一轮都没达标，才退回"最高分"（用户要的是有区分度，而不是一直给不高分的
+    # 结果打不下去）。
+    pick = best_gate or best_any
+    result["positive"] = pick["positive"]
+    say("结构校验完成：%d 分（第 %d 轮，%s）"
+        % (pick["score"], pick["round"], "达标" if pick["gate"] else "未达标，取最高分"), 95)
+    return {"rounds": history, "final_score": pick["score"],
+            "final_dims": pick["dimensions"], "picked_round": pick["round"],
             "candidates": len(result.get("positive_candidates") or []),
-            "iterations": len(history), "mode": "rules"}
+            "iterations": len(history), "mode": "rules", "gate": bool(pick["gate"])}
 
 
 def self_refine_natural(cfg, text, result, rounds=2, threshold=95, progress=None):
