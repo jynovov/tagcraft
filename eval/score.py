@@ -93,6 +93,21 @@ def _tags_of(items):
     return out
 
 
+def _covered(gold, pos_set):
+    """gold 是否被覆盖：完全同名，或者正向里是它的「加修饰前缀」变体。
+
+    Danbooru 的 tag 是复合式的：white_thighhighs 已经表达了「过膝袜」这个要素，
+    但「严格同名」口径会把它算成没命中。所以这里单独给出宽松口径，只认
+    「正向比 gold 更具体」（positive 以 _gold 结尾）这一种方向 ——
+    反向不认（gold=black_thighhighs 只给了 thighhighs，说明颜色没做对，不算覆盖）。
+    两套数字一起报，不拿宽松口径掩盖真缺口。
+    """
+    if gold in pos_set:
+        return True
+    suffix = "_" + gold
+    return any(p.endswith(suffix) for p in pos_set)
+
+
 def score_one(case, res, ms):
     positive = _tags_of(res.get("positive"))
     req = [t.lower() for t in case.get("required") or []]
@@ -100,6 +115,7 @@ def score_one(case, res, ms):
     pos_set = set(positive)
 
     hit_req = [t for t in req if t in pos_set]
+    hit_req_relaxed = [t for t in req if _covered(t, pos_set)]
     hit_opt = [t for t in opt if t in pos_set]
     stats = res.get("stats") or {}
     checked = int(stats.get("checked") or 0)
@@ -112,10 +128,12 @@ def score_one(case, res, ms):
     order_ok = all(groups[i] <= groups[i + 1] for i in range(len(groups) - 1))
 
     cover = len(hit_req) / float(len(req)) if req else 0.0
+    cover_relaxed = len(hit_req_relaxed) / float(len(req)) if req else 0.0
     return {
         "id": case.get("id"),
         "group": case.get("group"),
         "cover": cover,
+        "cover_relaxed": cover_relaxed,
         "opt": (len(hit_opt) / float(len(opt))) if opt else None,
         "valid": valid,
         "dup": dup,
@@ -124,6 +142,8 @@ def score_one(case, res, ms):
         "tool_calls": int(stats.get("tool_calls") or 0),
         "ms": round(ms, 1),
         "missing": [t for t in req if t not in pos_set],
+        "missing_relaxed": [t for t in req if not _covered(t, pos_set)],
+        "positive": positive,
         "error": res.get("error"),
         "positive_n": len(positive),
     }
@@ -138,6 +158,7 @@ def summarize(rows):
     return {
         "n": len(ok),
         "cover": sum(r["cover"] for r in ok) / len(ok),
+        "cover_relaxed": sum(r.get("cover_relaxed", r["cover"]) for r in ok) / len(ok),
         "opt": (sum(opt_rows) / len(opt_rows)) if opt_rows else 0.0,
         "valid": sum(r["valid"] for r in ok) / len(ok),
         "order": sum(1.0 for r in ok if r["order_ok"]) / len(ok),
@@ -151,13 +172,14 @@ def summarize(rows):
 
 def print_table(rows):
     print("%-5s %-12s %6s %6s %6s %5s %6s %8s  %s" %
-          ("id", "group", "cover", "opt", "valid", "ord", "calls", "ms", "缺的 gold"))
+          ("id", "group", "cover", "宽松", "opt", "ord", "calls", "ms", "缺的 gold"))
     for r in rows:
         if r.get("error"):
             print("%-5s %-12s  ERROR %s" % (r["id"], r["group"], str(r["error"])[:50]))
             continue
-        print("%-5s %-12s %5.0f%% %5s %5.0f%% %5s %6d %8.0f  %s" % (
+        print("%-5s %-12s %5.0f%% %5.0f%% %6s %6.0f%% %4s %6d %8.0f  %s" % (
             r["id"], r["group"], r["cover"] * 100,
+            r.get("cover_relaxed", r["cover"]) * 100,
             ("%.0f%%" % (r["opt"] * 100)) if r["opt"] is not None else "-",
             r["valid"] * 100, "OK" if r["order_ok"] else "乱",
             r["calls"], r["ms"], ", ".join(r["missing"])[:40]))
@@ -166,13 +188,27 @@ def print_table(rows):
 def print_summary(name, s):
     print("\n== %s ==" % name)
     print("  条目 %d（失败 %d）" % (s["n"], s["errors"]))
-    print("  gold 覆盖率   %.1f%%" % (s["cover"] * 100))
+    print("  gold 覆盖率   %.1f%%（严格同名）" % (s["cover"] * 100))
+    print("  宽松覆盖率    %.1f%%（白袜/大腿袜 这类更具体的 tag 也算命中）"
+          % (s.get("cover_relaxed", s["cover"]) * 100))
     print("  可选项命中    %.1f%%" % (s.get("opt", 0) * 100))
     print("  词表有效率    %.1f%%" % (s["valid"] * 100))
     print("  顺序合规     %.1f%%" % (s["order"] * 100))
     print("  纯重复 tag   %d 个" % s.get("dup", 0))
     print("  模型调用     平均 %.1f 次/条" % s["calls"])
     print("  耗时         平均 %.1f s/条，合计 %.0f s" % (s["ms"] / 1000.0, s["total_s"]))
+
+
+def _redact(opts):
+    """落盘前把 API Key 抹掉：跑分记录不该成为泄漏面。"""
+    out = dict(opts or {})
+    api = out.get("api")
+    if isinstance(api, dict):
+        api = dict(api)
+        if api.get("api_key"):
+            api["api_key"] = "***"
+        out["api"] = api
+    return out
 
 
 def run(base, opts, tag):
@@ -187,14 +223,15 @@ def run(base, opts, tag):
         print("[%2d/%d] %-5s cover=%3.0f%% calls=%d %.1fs" % (
             i, len(cases), row["id"], row["cover"] * 100, row["calls"], row["ms"] / 1000.0))
     s = summarize(rows)
-    print_table(rows)
-    print_summary(tag, s)
 
+    # 先落盘再打印：打印环节出问题（比如格式化 bug）不能把整轮跑分数据丢掉
     os.makedirs(RUN_DIR, exist_ok=True)
     out = os.path.join(RUN_DIR, "%s.json" % tag)
     with io.open(out, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps({"tag": tag, "opts": opts, "summary": s, "rows": rows},
+        f.write(json.dumps({"tag": tag, "opts": _redact(opts), "summary": s, "rows": rows},
                            ensure_ascii=False, indent=2) + "\n")
+    print_table(rows)
+    print_summary(tag, s)
     print("\n已保存：%s" % os.path.relpath(out, ROOT))
     return s
 
@@ -206,8 +243,10 @@ def compare(a_tag, b_tag):
     A, B = load(a_tag), load(b_tag)
     sa, sb = A["summary"], B["summary"]
     print("%-14s %10s %10s %10s" % ("指标", a_tag, b_tag, "差值"))
-    for key, label, pct in (("cover", "gold 覆盖率", True), ("opt", "可选项", True),
-                            ("valid", "词表有效", True), ("order", "顺序合规", True),
+    for key, label, pct in (("cover", "gold 覆盖率", True),
+                            ("cover_relaxed", "宽松覆盖率", True),
+                            ("opt", "可选项", True), ("valid", "词表有效", True),
+                            ("order", "顺序合规", True),
                             ("calls", "模型调用", False), ("ms", "耗时(ms)", False)):
         va, vb = sa.get(key, 0), sb.get(key, 0)
         d = vb - va
@@ -240,6 +279,18 @@ def selftest():
     assert abs(r2["cover"] - 0.2) < 1e-9, r2      # 只有 1girl 命中，5 个 gold 里中 1 个
     assert r2["valid"] == 1.0, r2
     assert r2["order_ok"] is False, r2            # 场景 tag 排在人面前面
+
+    # 宽松口径：更具体的变体算覆盖，反方向不算
+    assert _covered("thighhighs", {"white_thighhighs"}) is True
+    assert _covered("thighhighs", {"thighhighs"}) is True
+    assert _covered("black_thighhighs", {"thighhighs"}) is False
+    assert _covered("smile", {"smiling"}) is False
+    c = {"id": "B11", "group": "服装配饰",
+         "required": ["thighhighs", "loafers"], "optional": []}
+    r3 = score_one(c, {"positive": ["white_thighhighs", "loafers"], "stats": {}}, 10)
+    assert abs(r3["cover"] - 0.5) < 1e-9 and abs(r3["cover_relaxed"] - 1.0) < 1e-9, r3
+    assert r3["missing"] == ["thighhighs"] and r3["missing_relaxed"] == [], r3
+
     s = summarize([r, r2])
     assert abs(s["cover"] - 0.6) < 1e-9, s
     assert s["calls"] == 2.0, s

@@ -36,3 +36,6 @@ mock_llm_calls.json
 # 任务检查点（运行时生成，不提交）
 data/jobs.json
 data/.jobs-*.tmp
+
+# 跑分记录（可能回显 API Key，不提交）
+eval/runs/
