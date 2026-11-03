@@ -4,7 +4,7 @@
     一条命令跑完 TagCraft 的全部测试套件。
 
 .DESCRIPTION
-    26 套件 + 1 套大模型重试测试 = 27 套。默认按"快的先跑"的顺序：
+    26 套件 + 大模型重试 + 健壮性 = 28 套。默认按"快的先跑"的顺序：
     纯单元 → 前端 DOM → 起真服务的链路 → 端到端。
     任何一套失败都会在最后汇总里标出来，退出码非 0。
 
@@ -46,6 +46,7 @@ Write-Host ("node:   " + $Node)
 $pyTests = @(
     "frame_test.py", "fallback_compress_test.py", "rule_reflect_test.py", "order_test.py",
     "whitelist_test.py", "cache_test.py", "lc_tools_test.py", "llm_retry_test.py",
+    "robustness_test.py",
     "smoke_test.py", "agent_test.py", "krea_test.py", "concept_test.py",
     "concept_confirm_test.py", "local_concept_test.py", "merge_concept_test.py",
     "plan_test.py", "plan_prefetch_test.py", "prefetch_trace_test.py",

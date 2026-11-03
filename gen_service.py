@@ -14,7 +14,7 @@ import gen_cache
 import job_store
 import lc_tools
 
-from common import load_config, log
+from common import as_bool, as_float, as_int, load_config, log
 
 from dict_db import local_concepts, validate_tags
 
@@ -142,14 +142,14 @@ def _apply_api_overrides(cfg, body):
 
 
 def _reflect_rounds_of(body, natural):
-    """自省轮数：Krea 2 默认 4 轮，tag 模式默认 2 轮；显式传 0 就是关闭。"""
-    raw = body.get("reflect_rounds")
-    if raw is None:
-        return 4 if natural else 2
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 4 if natural else 2
+    """自省轮数：Krea 2 默认 4 轮，tag 模式默认 2 轮；显式传 0 就是关闭。
+
+    传了非法值（"abc"、负数、超大数）不让它抛异常，按默认值处理并夹到 0~6。
+    """
+    default = 4 if natural else 2
+    if body.get("reflect_rounds") is None:
+        return default
+    return as_int(body.get("reflect_rounds"), default, 0, 6)
 
 
 def _single_concept_parts(concepts):
@@ -192,8 +192,9 @@ def generate_single(body, send):
     if not is_known_model(pm):
         return send(400, {"error": "不认识的模型：%s" % pm})
     extra_rules = (body.get("extra_rules") or "")
-    max_tags = int(body.get("max_tags") or 45)
-    temperature = float(body.get("temperature") or 0.6)
+    # 入参一律宽容解析：max_tags="abc" / temperature=null 这类不该让请求 500
+    max_tags = as_int(body.get("max_tags"), 45, 1, 200)
+    temperature = as_float(body.get("temperature"), 0.6, 0.0, 2.0)
     sys_prompt = (body.get("system_prompt") or "")
     natural = get_model(pm)["mode"] == "natural"
     plan_flag = bool(body.get("plan", False))
@@ -410,18 +411,18 @@ def agent(body, send):
     natural = get_model(pm)["mode"] == "natural"
     kwargs = dict(
         extra_rules=(body.get("extra_rules") or ""),
-        max_tags=int(body.get("max_tags") or 45),
-        temperature=float(body.get("temperature") or 0.6),
-        max_rounds=int(body.get("max_rounds") or 6),
-        reflect=bool(body.get("reflect", True)),
+        max_tags=as_int(body.get("max_tags"), 45, 1, 200),
+        temperature=as_float(body.get("temperature"), 0.6, 0.0, 2.0),
+        max_rounds=as_int(body.get("max_rounds"), 6, 1, 20),
+        reflect=as_bool(body.get("reflect"), True),
         reflect_rounds=_reflect_rounds_of(body, natural),
-        use_tools=bool(body.get("use_tools", True)),
+        use_tools=as_bool(body.get("use_tools"), True),
         prompt_model=pm,
         system_prompt=(body.get("system_prompt") or ""),
-        plan=bool(body.get("plan", False)),
+        plan=as_bool(body.get("plan"), False),
         aux_model=(cfg.get("aux_model") or "").strip(),
-        fallback=bool(body.get("fallback", True)),
-        compress=bool(body.get("compress", True)),
+        fallback=as_bool(body.get("fallback"), True),
+        compress=as_bool(body.get("compress"), True),
     )
     akind = "krea" if natural else "agent"
     ckey = ""

@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,7 +23,7 @@ import job_store
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from common import DATA_DIR, ROOT, load_config, log
+from common import DATA_DIR, ROOT, as_int, load_config, log
 
 from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_count, dict_meta, download_dict, import_csv, local_concepts, search_tags, suggest_for, validate_tags
 from prompts import DEFAULT_NEGATIVE, DEFAULT_QUALITY, TAG_CN
@@ -46,6 +47,10 @@ MIME = {
     ".ico": "image/x-icon",
     ".json": "application/json; charset=utf-8",
 }
+
+# 请求体上限：ComfyUI 工作流可能有几百 KB，但正常不会到 8MB。
+# 超过就直接 413，别把整个进程的内存交给一个 Content-Length 数字。
+MAX_BODY = 8 * 1024 * 1024
 # 后台任务状态现在落在 data/jobs.json（见 job_store.py），进程重启后还能知道
 # 上次哪个任务被中断了。这里保留原来的 job_* 函数名，调用方不用改。
 import gen_service  # noqa: E402
@@ -80,14 +85,57 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        """读 JSON 请求体。长度非法或超限时抛 ValueError，由外层转成 413。"""
+        n = as_int(self.headers.get("Content-Length"), 0, 0)
         if n <= 0:
             return {}
+        if n > MAX_BODY:
+            raise ValueError("请求体过大：%d 字节，上限 %d" % (n, MAX_BODY))
         raw = self.rfile.read(n)
         try:
             return json.loads(raw.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, ValueError):
             return {}
+
+    # ---------- 健壮性兜底
+    def _fail(self, err):
+        """任何没预料到的异常都在这里收口：记完整堆栈，回 500 JSON。
+
+        以前这类异常会一路冒到 BaseHTTPRequestHandler，结果只是往 stderr 打一行，
+        浏览器那边拿到的是「连接被重置 / 空响应」，看着像服务挂了，还查不到原因。
+        """
+        try:
+            log("请求 %s %s 处理失败：%s\n%s" % (
+                getattr(self, "command", "?"), getattr(self, "path", "?"),
+                err, traceback.format_exc()[-2000:]))
+        except Exception:  # noqa: BLE001 - 记日志本身不能再炸
+            pass
+        try:
+            self._send(500, {"error": "服务内部错误：%s: %s" % (type(err).__name__, err)})
+        except Exception:  # noqa: BLE001 - 响应可能已经发出去一半了
+            pass
+
+    def _loopback_bound(self):
+        """服务是不是只绑在本机回环上（关服务这种接口只给本机用）。"""
+        try:
+            host = str(self.server.server_address[0])
+        except Exception:  # noqa: BLE001
+            return True
+        return host in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1")
+
+    def _same_origin(self):
+        """挡跨站请求：浏览器发的请求会带 Origin；本地工具（curl/测试）不带，放行。"""
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return False
+        try:
+            netloc = urllib.parse.urlparse(origin).netloc.lower()
+        except Exception:  # noqa: BLE001
+            return False
+        return netloc == host
 
     def _static(self, rel):
         """按扩展名提供静态文件，带目录穿越防护。"""
@@ -107,6 +155,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 路由
     def do_GET(self):
+        try:
+            self._route_get()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _route_get(self):
         path = self.path.split("?")[0]
         query = {}
         if "?" in self.path:
@@ -156,9 +210,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/dict/search":
             q = query.get("q", "")
-            limit = int(query.get("limit", "40") or 40)
-            cat = query.get("category")
-            cat = int(cat) if cat not in (None, "", "all") else None
+            # 参数一律宽容解析：limit=abc / category=xx 不能把请求打成连接中断
+            limit = as_int(query.get("limit"), 40, 1, 200)
+            cat_raw = query.get("category")
+            cat = None if cat_raw in (None, "", "all") else as_int(cat_raw, None, 0, 9)
             return self._send(200, {"results": search_tags(q, limit, cat)})
 
         if path == "/api/dict/suggest":
@@ -179,6 +234,15 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "unknown path " + path})
 
     def do_POST(self):
+        try:
+            self._route_post()
+        except ValueError as e:
+            # 参数层面的拒绝（比如请求体过大），回 413 而不是 500
+            self._send(413, {"error": str(e)})
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _route_post(self):
         path = self.path.split("?")[0]
         body = self._json_body()
 
@@ -195,6 +259,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "reply": (reply or "ok").strip()[:40]})
 
         if path == "/api/shutdown":
+            # 关服务是不可逆操作：只允许「本机回环 + 同源页面」发起。
+            # 跨站页面（哪怕只是本地随便一个网页）以前一个 POST 就能把它关掉。
+            if not self._loopback_bound():
+                return self._send(403, {"error": "服务不在本机回环地址上，已拒绝远程关闭"})
+            if not self._same_origin():
+                return self._send(403, {"error": "跨站请求不能关闭服务"})
             self._send(200, {"ok": True})
             log("收到关闭请求，正在退出…")
             threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -259,6 +329,10 @@ def main():
 
     cfg = load_config()
     port = args.port or int(cfg.get("port") or 8848)
+
+    if args.host not in ("127.0.0.1", "::1", "localhost"):
+        log("警告：服务绑定在 %s 上，同网段其他机器可以直接访问页面和接口"
+            "（/api/shutdown 仍只允许本机发起）。只在本机用请加 --host 127.0.0.1" % args.host)
 
     if dict_count() == 0:
         if os.path.exists(SEED_PATH):

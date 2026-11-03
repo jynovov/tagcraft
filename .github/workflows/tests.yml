@@ -45,3 +45,13 @@ jobs:
           python-version: "3.12"
       - name: 大模型调用的重试 / 截断兜底
         run: python tests/llm_retry_test.py
+
+  robustness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 坏输入 / 关服务闸 / 超大请求体（会真起一个服务，用种子词表）
+        run: python tests/robustness_test.py
