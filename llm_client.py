@@ -1,6 +1,7 @@
 """大模型调用：请求、重试、错误翻译、单次生成。"""
 
 import argparse
+import http.client
 import io
 import json
 import os
@@ -156,9 +157,13 @@ def _post_chat(cfg, payload, retries=2, retry_wait=1.6):
                 continue
             raise RuntimeError(msg)
         except Exception as e:  # noqa: BLE001
-            # 网络抖动 / 超时也值得重试一次
+            # 网络抖动 / 超时也值得重试一次。
+            # http.client.HTTPException 必须算进来：IncompleteRead（连接被中途掐断、
+            # 读到 0 字节）属于它，不是 OSError，之前的白名单漏掉了它 ——
+            # 表现为偶发的 “调用失败：IncompleteRead(0 bytes read)” 直接 500。
             if attempt < tries - 1 and isinstance(
-                    e, (urllib.error.URLError, TimeoutError, OSError)):
+                    e, (urllib.error.URLError, TimeoutError, OSError,
+                        http.client.HTTPException)):
                 wait = retry_wait * (2 ** attempt)
                 log("调用大模型失败（%s），%.1fs 后重试（第 %d/%d 次）"
                     % (e, wait, attempt + 2, tries))
