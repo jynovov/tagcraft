@@ -17,6 +17,62 @@ import webbrowser
 from common import DATA_DIR, DB_PATH, log
 
 
+# ============================ 中文口语 → 词表 tag ============================
+# 词表里的中文名是「翻译腔」：thighhighs=大腿袜、pinafore_dress=背心裙、
+# upper_body=上半身、negative_space=负空间……而用户写的是日常说法（过膝袜、
+# 背带裙、半身、留白）。这些说法在词表里查不到，概念就抽不出来，gold 覆盖率
+# 就卡在服装配饰那一组（实测 67~70%）。
+#
+# 这张表有两个用途：
+#   1) 键并进中文索引 → local_concepts 才抽得到这几个词（否则连抽都抽不出）；
+#   2) map_concepts 的同义词兜底（第 3 层）→ 落到正确的 tag。
+# 硬约束：右边必须是词表里真实存在的 tag（映射时仍会再过一次 get_tag）。
+CN_SYNONYMS = {
+    # 构图 / 画面属性
+    "留白": "negative_space",
+    "空白": "negative_space",
+    "负空间": "negative_space",
+    "虚化": "blurry_background",
+    "模糊背景": "blurry_background",
+    # 材质 / 媒介
+    "宣纸": "paper_texture",
+    "纸张纹理": "paper_texture",
+    "水墨": "ink_wash",
+    "水墨画": "ink_wash_painting",
+    # 场景 / 道具
+    "拱桥": "arch_bridge",
+    "白墙": "white_wall",
+    "庭院": "garden",
+    "木屋": "wooden_house",
+    "竹林": "bamboo",
+    "星空": "star_(sky)",
+    # 服装 / 配饰（服装配饰组的主要缺口）
+    "过膝袜": "thighhighs",
+    "大腿袜": "thighhighs",
+    "背带裙": "pinafore_dress",
+    "背心裙": "pinafore_dress",
+    "女仆装": "maid",
+    "围裙": "apron",
+    "发带": "hairband",
+    "发箍": "hairband",
+    "头纱": "veil",
+    "面纱": "veil",
+    "运动服": "track_suit",
+    "运动套装": "track_suit",
+    "高马尾": "ponytail",
+    "折扇": "holding_fan",
+    "扇子": "holding_fan",
+    "银发": "white_hair",
+    "白发": "white_hair",
+    "手机": "cellphone",
+    "太阳镜": "sunglasses",
+    "墨镜": "sunglasses",
+    # 索引里只有带方位词的整词，长匹配会把这些整词抽出来
+    "草地上": "grass",
+    "看手机": "cellphone",
+}
+
+
 
 CSV_PATH = os.path.join(DATA_DIR, "danbooru_zh.csv")
 
@@ -603,7 +659,12 @@ def cn_index():
         with _cn_index_lock:
             if _cn_index_cache is None:
                 try:
-                    _cn_index_cache = build_cn_index(load_cn_rows())
+                    index = build_cn_index(load_cn_rows())
+                    # 手工补充的中文口语并进索引；setdefault 保证词表自己的
+                    # 中文名优先（词表有就用词表的，没有才用手册里的说法）
+                    for cn, tag in CN_SYNONYMS.items():
+                        index.setdefault(cn, tag)
+                    _cn_index_cache = index
                 except Exception as e:  # noqa: BLE001 - 索引坏了也不能拖垮生成
                     log("中文索引构建失败，本地概念抽取降级为空：", e)
                     _cn_index_cache = {}

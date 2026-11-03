@@ -200,6 +200,12 @@ def test_cache():
         check("同一进程只构建一次", calls["n"] == 1, "实际 %d 次" % calls["n"])
         check("两次拿到同一个索引对象", first is second)
         check("索引内容正确", first.get("长发") == "long_hair", str(first))
+        # 手工对照表（CN_SYNONYMS）要并进索引，否则「留白 / 背带裙」这种
+        # 词表里没有的日常说法永远抽不出来
+        check("手工对照表并进索引", first.get("留白") == "negative_space"
+              and first.get("背带裙") == "pinafore_dress", "缺对照表项")
+        check("词表自己的中文名优先于对照表",
+              first.get("长发") == "long_hair", str(first.get("长发")))
         dict_db.invalidate_cn_index()
         dict_db.cn_index()
         check("invalidate 后按新词表重建", calls["n"] == 2, "实际 %d 次" % calls["n"])

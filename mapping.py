@@ -7,6 +7,8 @@
 
 import re
 
+import dict_db
+
 from dict_db import get_tag, get_tags, resolve_alias, search_tags
 
 _MODIFIER_PREFIXES = {
@@ -52,19 +54,10 @@ def _is_general(hit):
     return (hit or {}).get("category") not in (1, 3, 4)
 
 
-# 小型同义词兜底表：中文概念 → 词表里的英文 tag。
-# 只覆盖「中文很常用、词表按中文却查不到」的那几个抽象项（留白、材质、媒介等）。
-# 注意：映射前仍要过词表校验，词表里没有的 tag 一律忽略（例如 ink_wash / white_wall）。
-TAG_SYNONYMS = {
-    "留白": "negative_space",
-    "空白": "negative_space",
-    "宣纸": "paper_texture",
-    "纸张纹理": "paper_texture",
-    "水墨": "ink_wash",
-    "水墨画": "ink_wash_painting",
-    "拱桥": "arch_bridge",
-    "白墙": "white_wall",
-}
+# 同义词兜底表已经搬到 dict_db（那边还要用它补中文索引，避免两处维护）。
+# 这里保留 TAG_SYNONYMS 这个名字继续对外（agent_core 是这么导入的）。
+# 映射前仍会过词表校验：词表里没有的 tag 一律忽略。
+TAG_SYNONYMS = dict_db.CN_SYNONYMS
 
 
 def _synonym_key(concept):
@@ -174,6 +167,16 @@ def split_concept_segments(concept, max_segments=_CONCEPT_SEGMENT_MAX):
 
 def _lookup_concept(concept):
     """单段精确映射（规则 1~5）。返回 (命中记录, 搜索候选)，命中时候选为 None。"""
+    # 0) 手工对照表里「整词完全相等」的项优先。
+    #    词典按热度挑的近义词经常偏具体（木屋→cabin、星空→starry_sky、
+    #    草地上→on_grass、看手机→looking_at_phone），用户写的是通用说法，
+    #    就该落到通用 tag 上；这张表是人手核对过的，压过词典的模糊匹配。
+    key = str(concept or "").strip()
+    if key in TAG_SYNONYMS:
+        syn_hit = get_tag(TAG_SYNONYMS[key])
+        if syn_hit:
+            return syn_hit, None
+
     hit = get_tag(concept)
     if not (hit and _is_general(hit)):
         hit = None
