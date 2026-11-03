@@ -390,7 +390,8 @@ function bindExamplePicker(btnId, inputId, onChange, pool) {
   if (!btn || !input) return;
   btn.addEventListener('click', () => {
     showExampleMenu(btn, text => {
-      if (String(input.value).trim() && !confirm('用示例替换当前描述？')) return;
+      // 点示例即填入，直接覆盖当前描述。这里以前有一句 confirm 确认框，
+      // 每次选示例都弹一次（输入框有草稿时必弹），太吵，已去掉。
       input.value = text;
       input.focus();
       if (onChange) onChange();
