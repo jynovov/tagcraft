@@ -76,7 +76,7 @@ const ctx = {
 };
 ctx.window = ctx;
 vm.createContext(ctx);
-for (const f of ['common.js', 'favorites.js']) {
+for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'favorites.js']) {
   vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
 }
 

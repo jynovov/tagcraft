@@ -116,7 +116,7 @@ const OK_TAG = {
 
 async function main() {
   /* ================= 生成页（app.js） ================= */
-  const app = createPage(['common.js', 'app.js'], (url, opts) => {
+  const app = createPage(['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'app.js'], (url, opts) => {
     if (opts && opts.body) {
       try { app.capture.bodies.push(JSON.parse(opts.body)); } catch (e) { /* ignore */ }
     }
@@ -140,7 +140,6 @@ chk('关闭后 planOn 为假', planOn() === false);
 chk('关闭后写入 tagcraft.plan=0', localStorage.getItem('tagcraft.plan') === '0');
 
 /* ---------- 2. 计划面板渲染 ---------- */
-drafts = []; curId = null;
 initDrafts();
 chk('新草稿默认没有计划', state.plan === null);
 $id('inputText').value = '黄昏海边女生';
@@ -178,7 +177,6 @@ chk('计划随草稿一起保存',
 /* ---------- 5. 请求体里的 plan 跟随开关 ---------- */
 $id('useAgent').checked = false;   // 单次模式，避免轮询
 localStorage.clear();
-drafts = []; curId = null;
 initDrafts();
 $id('inputText').value = '请求体测试';
 __capture.bodies.length = 0;
@@ -211,7 +209,7 @@ return R;
 
   /* ================= Krea2 页（krea.js） ================= */
   let krea;
-  krea = createPage(['common.js', 'krea.js'], (url, opts) => {
+  krea = createPage(['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'krea.js'], (url, opts) => {
     if (opts && opts.body) {
       try { krea.capture.bodies.push(JSON.parse(opts.body)); } catch (e) { /* ignore */ }
     }
@@ -230,7 +228,6 @@ const chk = (n, c, x) => R.push([n, !!c, x === undefined ? '' : String(x)]);
 const $id = id => document.getElementById(id);
 
 localStorage.clear();
-drafts = []; curId = null;
 initDrafts();
 chk('Krea2 页新草稿默认没有计划', state.plan === null);
 
@@ -289,7 +286,7 @@ return R;
     kreaHtml.indexOf('id="planBox"') < kreaHtml.indexOf('id="traceBox"'), '']);
 
   /* ================= 设置页（settings.js） ================= */
-  const set = createPage(['common.js', 'settings.js'],
+  const set = createPage(['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'settings.js'],
     () => Promise.reject(new Error('测试环境不联网')));
   const setHtml = fs.readFileSync(path.join(WS, 'settings.html'), 'utf8');
 
@@ -303,7 +300,7 @@ init();
 chk('设置页默认不勾选规划展示', $id('plan').checked === false);
 chk('设置页不再有严格查词勾选框', !/id="strict"/.test(setHtml));
 chk('不写 tagcraft.strict', localStorage.getItem('tagcraft.strict') === null);
-chk('设置页有辅助模型输入框', /id="auxModel"/.test(setHtml));
+chk('设置页不再有辅助模型输入框（只用一个模型）', !/id="auxModel"/.test(setHtml));
 
 savePlanOn(true);
 fill();
@@ -320,12 +317,9 @@ chk('设置页勾选即存', planOn() === true && localStorage.getItem('tagcraft
 chk('规划开关不混进 settings 表',
     JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').plan === undefined);
 
-$id('auxModel').value = 'fast-aux';
 persist();
-chk('设置页把辅助模型写进 settings',
-    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').auxModel === 'fast-aux');
-fill();
-chk('设置页重新打开能回填辅助模型', $id('auxModel').value === 'fast-aux');
+chk('设置页不再写 auxModel 字段',
+    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').auxModel === undefined);
 
 return R;
 })();`;

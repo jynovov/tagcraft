@@ -91,7 +91,7 @@ function createPage(files) {
   return { ctx, store, els, el };
 }
 
-const main = createPage(['common.js', 'app.js']);
+const main = createPage(['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'app.js']);
 
 const script = `(() => {
 const R = [];
@@ -346,15 +346,11 @@ chk('分项为 null 时不崩', (function () {
 
 /* ---------- 17. 概念核对没有开关（tag 模式始终开启） ---------- */
 localStorage.clear();
-chk('common.js 不再提供严格查词开关',
+chk('不再提供严格查词开关',
     typeof strictOn === 'undefined' && typeof saveStrictOn === 'undefined');
 chk('不写 tagcraft.strict', localStorage.getItem('tagcraft.strict') === null);
-chk('辅助模型读写函数可用',
-    typeof auxModelName === 'function' && typeof saveAuxModel === 'function');
-saveAuxModel('fast-model');
-chk('辅助模型写进 settings 表',
-    auxModelName() === 'fast-model' &&
-    JSON.parse(localStorage.getItem('tagcraft.settings') || '{}').auxModel === 'fast-model');
+chk('没有辅助模型读写函数（只用一个模型）',
+    typeof auxModelName === 'undefined' && typeof saveAuxModel === 'undefined');
 
 /* ---------- 18. 轨迹里的概念核对摘要 ---------- */
 state.stats = { model: 4, tool_calls: 2, checked: 8, unknown: 1, ms: 1000,
@@ -421,7 +417,7 @@ return R;
 const mainRows = vm.runInContext(script, main.ctx, { filename: 'ui-test' });
 
 /* ---------- 历史页分页（单独 context：history.js 与 app.js 都定义了 render） ---------- */
-const his = createPage(['common.js', 'history.js']);
+const his = createPage(['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'history.js']);
 const historyScript = `(() => {
 const R = [];
 const chk = (n, c, x) => R.push([n, !!c, x === undefined ? '' : String(x)]);

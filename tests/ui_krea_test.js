@@ -61,7 +61,7 @@ ctx.prompt = () => ctx.__promptAnswer;
 ctx.confirm = () => ctx.__confirmAnswer !== false;
 vm.createContext(ctx);
 
-for (const f of ['common.js', 'krea.js']) {
+for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'krea.js']) {
   vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
 }
 
@@ -254,6 +254,8 @@ const kreaHtml = fs.readFileSync(path.join(WS, 'krea.html'), 'utf8');
 rows.push(['Krea 页保留自省开关', /id="useAgent"/.test(kreaHtml)]);
 rows.push(['自省开关文案正确', /<input id="useAgent"[^>]*>\s*自省/.test(kreaHtml)]);
 rows.push(['Krea 页不再有术语对照', kreaHtml.indexOf('术语对照') < 0]);
+rows.push(['Krea 页有「译成中文」按钮', /id="btnTranslate"/.test(kreaHtml)]);
+rows.push(['Krea 页有译文块（默认收起）', /id="transBox"[^>]*hidden/.test(kreaHtml)]);
 let bad = 0;
 for (const [name, ok, extra] of rows) {
   console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + name + (extra && !ok ? '  → ' + extra : ''));

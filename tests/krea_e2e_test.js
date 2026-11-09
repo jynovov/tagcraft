@@ -59,8 +59,9 @@ function waitUp(port, ms = 25000) {
     { env: Object.assign({}, process.env, { MOCK_LLM_PORT: String(mp), MOCK_LLM_DUMP: dump }),
       stdio: 'ignore' });
   const app = spawn(PY, [path.join(WS, 'server.py'), '--port', String(ap),
-                         '--no-browser', '--no-update'], { stdio: 'ignore', env: Object.assign({}, process.env, { TAGCRAFT_NO_CACHE: '1' }) });
+                         '--no-browser', '--no-update'], { stdio: 'ignore', env: Object.assign({}, process.env, { TAGCRAFT_NO_CACHE: '1', TAGCRAFT_API_KEY: 'k' }) });
   const BASE = 'http://127.0.0.1:' + ap;
+  // Key 走环境变量传给服务端（A8 之后前端不再持有 Key，只发基准地址与模型名）
   const API = { api_base: 'http://127.0.0.1:' + mp + '/v1/chat/completions',
                 api_key: 'k', model: 'slow-krea' };
   try {
@@ -105,7 +106,7 @@ function waitUp(port, ms = 25000) {
     };
     ctx.window = ctx;
     vm.createContext(ctx);
-    for (const f of ['common.js', 'krea.js']) {
+    for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'krea.js']) {
       vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
     }
 

@@ -98,7 +98,7 @@ def main():
     app = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"),
                             "--port", str(app_port), "--no-browser", "--no-update"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env=dict(os.environ, TAGCRAFT_NO_CACHE="1"))
+                           env=dict(os.environ, TAGCRAFT_NO_CACHE="1", TAGCRAFT_CONFIG=os.path.join(os.environ.get('TEMP', '/tmp'), 'tagcraft-test-empty.json')))
     text = "黄昏的海边，一个女生穿着校服和过膝袜，回头看向镜头"
     try:
         if not wait_up(mock_port) or not wait_up(app_port):
@@ -250,6 +250,18 @@ def main():
         st, b = post(base, "/api/reflect", {"text": text, "prompt_model": "krea",
                                             "prompt": "", "api": api})
         check("没有提示词时拒绝 krea 自省", st == 400 and "提示词" in b, "HTTP %s" % st)
+
+        print("== 译成中文：POST /api/translate")
+        st, b = post(base, "/api/translate", {
+            "text": "A girl on a beach at dusk, warm light.", "api": api})
+        if st == 200:
+            r = json.loads(b)
+            check("翻译接口返回 translated", bool(r.get("translated")), b[:120])
+            check("翻译不改提示词字段", "prompt" not in r)
+        else:
+            check("翻译接口返回 translated", False, b[:200])
+        st, b = post(base, "/api/translate", {"text": "   ", "api": api})
+        check("空文本拒绝翻译", st == 400, "HTTP %s" % st)
 
         print("== 关掉自省：只做单次生成")
         st, b = post(base, "/api/agent", {"text": text, "prompt_model": "krea",

@@ -80,7 +80,7 @@ async function runPage(page, result, probe, lsJob, btnText) {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  for (const f of ['common.js', page]) {
+  for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', page]) {
     vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
   }
 

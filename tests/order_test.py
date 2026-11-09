@@ -149,6 +149,13 @@ def unit_checks():
     check("画师 → 风格/媒介组",
           agent_core.tag_order_group("wlop") == agent_core.ORDER_STYLE,
           str(agent_core.tag_order_group("wlop")))
+    # 作品 tag 跟着角色走：Danbooru 惯例是角色后面紧跟作品，缺了容易画成「像但不是」
+    check("作品 tag（vocaloid）→ 人物特征组",
+          agent_core.tag_order_group("vocaloid") == agent_core.ORDER_CHARACTER,
+          str(agent_core.tag_order_group("vocaloid")))
+    check("作品 tag（touhou）→ 人物特征组",
+          agent_core.tag_order_group("touhou") == agent_core.ORDER_CHARACTER,
+          str(agent_core.tag_order_group("touhou")))
     check("lighting 系 tag → 光照组",
           agent_core.tag_order_group("backlighting") == agent_core.ORDER_LIGHT)
     check("watercolor_(medium) → 风格/媒介组",
