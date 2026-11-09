@@ -13,72 +13,13 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { createPage } = require('./_dom_stub');
 
 const WS = path.join(__dirname, '..');
-const store = {};
-const els = [];
-
-function makeEl(id) {
-  return {
-    id, value: '', checked: false, hidden: false, textContent: '', innerHTML: '',
-    options: [], style: {}, dataset: {}, className: '', _on: {},
-    addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); },
-    removeEventListener() {},
-    click() { (this._on.click || []).slice().forEach(fn => fn({ target: this })); },
-    // 只解析测试会用到的 [data-xxx] 按钮，用来模拟点击
-    querySelectorAll(sel) {
-      const m = /^\[data-([a-z-]+)\]$/.exec(String(sel || '').trim());
-      if (!m) return [];
-      const attr = m[1];
-      // 同一次渲染里要拿到同一批按钮，否则测试点不到 render 时绑的监听
-      const key = attr + '|' + this.innerHTML;
-      if (this._qcache && this._qcache[key]) return this._qcache[key];
-      const out = [];
-      const re = new RegExp('<[a-z]+\\b[^>]*\\bdata-' + attr + '="([^"]*)"[^>]*>', 'gi');
-      let hit;
-      while ((hit = re.exec(this.innerHTML))) {
-        const b = makeEl('_q_' + attr + '_' + out.length);
-        b.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = hit[1];
-        b.disabled = /\bdisabled\b/.test(hit[0]);
-        out.push(b);
-      }
-      this._qcache = this._qcache || {};
-      this._qcache[key] = out;
-      return out;
-    },
-    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
-    appendChild() {}, remove() {}, focus() {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    getBoundingClientRect() { return { left: 0, top: 0, bottom: 0, width: 0, height: 0 }; },
-    closest() { return null; }
-  };
-}
-function el(id) { return els[id] || (els[id] = makeEl(id)); }
-
-const ctx = {
-  console, setTimeout, clearTimeout, JSON, Date, Math, parseInt, parseFloat, isNaN,
-  localStorage: {
-    getItem: k => (k in store ? store[k] : null),
-    setItem: (k, v) => { store[k] = String(v); },
-    removeItem: k => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-    keys: () => Object.keys(store)
-  },
-  document: {
-    getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-    createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
-  },
-  navigator: { clipboard: { writeText: () => Promise.resolve() } },
-  location: { href: '/' },
-  prompt: () => '方案 A',
-  confirm: () => true,
-  fetch: () => Promise.reject(new Error('测试环境不联网'))
-};
-ctx.window = ctx;
-vm.createContext(ctx);
-for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'favorites.js']) {
-  vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
-}
+const { ctx, store, els } = createPage(
+  ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'favorites.js'],
+  { prompt: () => '方案 A', confirm: () => true }
+);
 
 const script = `(() => {
 const R = [];

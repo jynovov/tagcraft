@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { createPage } = require('./_dom_stub');
 
 const WS = path.join(__dirname, '..');
 const fails = [];
@@ -40,49 +41,27 @@ function makeEl(id) {
 }
 
 async function runPage(page, result, probe, lsJob, btnText) {
-  const store = {}, sess = {}, els = {};
-  const el = id => els[id] || (els[id] = makeEl(id));
   const calls = [];
-  const ctx = {
-    console, setTimeout, clearTimeout, setInterval, clearInterval,
-    JSON, Date, Math, parseInt, parseFloat, isNaN, Promise,
-    localStorage: {
-      getItem: k => (k in store ? store[k] : null),
-      setItem: (k, v) => { store[k] = String(v); },
-      removeItem: k => { delete store[k]; }, clear: () => {}
-    },
-    sessionStorage: {
-      getItem: k => (k in sess ? sess[k] : null),
-      setItem: (k, v) => { sess[k] = String(v); },
-      removeItem: k => { delete sess[k]; }
-    },
-    document: {
-      getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-      createElement: t => makeEl('_new_' + t), addEventListener() {},
-      body: makeEl('body')
-    },
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
-    location: { href: '/' }, prompt: () => 'x', confirm: () => true,
-    __mode: 'interrupted',
-    __calls: calls,
-    fetch: async u => {
-      calls.push(String(u));
-      let body;
-      if (String(u).indexOf('/api/agent/retry') >= 0) body = { job_id: 'newid' };
-      else if (ctx.__mode === 'interrupted') {
-        body = { status: 'interrupted', pct: 37, msg: '上次运行被中断，可重试',
-                 steps: ['任务已创建', '上次运行被中断，可重试'] };
-      } else {
-        body = { status: 'done', pct: 100, msg: '完成', result, steps: ['完成'] };
+  const { ctx, store, sess, els } = createPage(
+    ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', page],
+    {
+      session: true,
+      fetch: async u => {
+        calls.push(String(u));
+        let body;
+        if (String(u).indexOf('/api/agent/retry') >= 0) body = { job_id: 'newid' };
+        else if (ctx.__mode === 'interrupted') {
+          body = { status: 'interrupted', pct: 37, msg: '上次运行被中断，可重试',
+                   steps: ['任务已创建', '上次运行被中断，可重试'] };
+        } else {
+          body = { status: 'done', pct: 100, msg: '完成', result, steps: ['完成'] };
+        }
+        return { ok: true, status: 200, json: async () => body };
       }
-      return { ok: true, status: 200, json: async () => body };
     }
-  };
-  ctx.window = ctx;
-  vm.createContext(ctx);
-  for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', page]) {
-    vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
-  }
+  );
+  ctx.__mode = 'interrupted';
+  ctx.__calls = calls;
 
   const rows = await vm.runInContext(`(async () => {
     const R = [];

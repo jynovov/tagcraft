@@ -17,82 +17,11 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { createPage } = require('./_dom_stub');
 
 const WS = path.join(__dirname, '..');
 
 /** 造一个页面运行环境：极简 DOM 桩 + 独立 localStorage + 指定的前端脚本。 */
-function createPage(files, fetchImpl) {
-  const store = {};
-  const els = [];
-
-  function makeEl(id) {
-    return {
-      id, value: '', checked: false, hidden: false, textContent: '', innerHTML: '',
-      options: [], style: {}, dataset: {}, className: '', _on: {},
-      addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); },
-      removeEventListener() {},
-      click() { (this._on.click || []).slice().forEach(fn => fn({ target: this })); },
-      querySelectorAll(sel) {
-        const m = /^\[data-([a-z-]+)\]$/.exec(String(sel || '').trim());
-        if (!m) return [];
-        const attr = m[1];
-        const key = attr + '|' + this.innerHTML;
-        if (this._qcache && this._qcache[key]) return this._qcache[key];
-        const out = [];
-        const re = new RegExp('<[a-z]+\\b[^>]*\\bdata-' + attr + '="([^"]*)"[^>]*>', 'gi');
-        let hit;
-        while ((hit = re.exec(this.innerHTML))) {
-          const b = makeEl('_q_' + attr + '_' + out.length);
-          b.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = hit[1];
-          b.disabled = /\bdisabled\b/.test(hit[0]);
-          out.push(b);
-        }
-        this._qcache = this._qcache || {};
-        this._qcache[key] = out;
-        return out;
-      },
-      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
-      appendChild() {}, remove() {}, focus() {},
-      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-      getBoundingClientRect() { return { left: 0, top: 0, bottom: 0, width: 0, height: 0 }; },
-      closest() { return null; }
-    };
-  }
-  function el(id) { return els[id] || (els[id] = makeEl(id)); }
-
-  const capture = { bodies: [] };
-  const ctx = {
-    console, setTimeout, clearTimeout, JSON, Date, Math, parseInt, parseFloat, isNaN,
-    localStorage: {
-      getItem: k => (k in store ? store[k] : null),
-      setItem: (k, v) => { store[k] = String(v); },
-      removeItem: k => { delete store[k]; },
-      clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-      keys: () => Object.keys(store)
-    },
-    sessionStorage: {
-      getItem: () => null, setItem() {}, removeItem() {}
-    },
-    document: {
-      getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-      createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
-    },
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
-    location: { href: '/' },
-    fetch: fetchImpl || (() => Promise.reject(new Error('测试环境不联网')))
-  };
-  ctx.__capture = capture;
-  ctx.window = ctx;
-  ctx.prompt = () => ctx.__promptAnswer;
-  ctx.confirm = () => ctx.__confirmAnswer !== false;
-  vm.createContext(ctx);
-
-  for (const f of files) {
-    vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
-  }
-  return { ctx, store, els, el, capture };
-}
-
 function runner() {
   const rows = [];
   const chk = (n, c, x) => rows.push([n, !!c, x === undefined ? '' : String(x)]);

@@ -17,53 +17,13 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { createPage } = require('./_dom_stub');
 
 const WS = path.join(__dirname, '..');
-const store = {};
-const els = [];
-
-function makeEl(id) {
-  return {
-    id, value: '', checked: false, hidden: false, textContent: '', innerHTML: '',
-    options: [], style: {}, dataset: {}, className: '',
-    addEventListener() {}, removeEventListener() {},
-    querySelectorAll() { return []; }, querySelector() { return null; },
-    appendChild() {}, remove() {}, focus() {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    getBoundingClientRect() { return { left: 0, top: 0, bottom: 0, width: 0, height: 0 }; },
-    closest() { return null; }
-  };
-}
-function el(id) { return els[id] || (els[id] = makeEl(id)); }
-
-const ctx = {
-  console, setTimeout, clearTimeout, JSON, Date, Math, parseInt, parseFloat, isNaN,
-  localStorage: {
-    getItem: k => (k in store ? store[k] : null),
-    setItem: (k, v) => { store[k] = String(v); },
-    removeItem: k => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-    keys: () => Object.keys(store)
-  },
-  sessionStorage: {
-    getItem: k => null, setItem() {}, removeItem() {}
-  },
-  document: {
-    getElementById: el, querySelectorAll: () => [], querySelector: () => null,
-    createElement: t => makeEl('_new_' + t), addEventListener() {}, body: makeEl('body')
-  },
-  navigator: { clipboard: { writeText: () => Promise.resolve() } },
-  location: { href: '/' },
-  fetch: () => Promise.reject(new Error('测试环境不联网'))
-};
-ctx.window = ctx;
-ctx.prompt = () => ctx.__promptAnswer;
-ctx.confirm = () => ctx.__confirmAnswer !== false;
-vm.createContext(ctx);
-
-for (const f of ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'krea.js']) {
-  vm.runInContext(fs.readFileSync(path.join(WS, f), 'utf8'), ctx, { filename: f });
-}
+const { ctx, store, els } = createPage(
+  ['store.js', 'ui_fx.js', 'common.js', 'gen_page.js', 'krea.js'],
+  { session: true }
+);
 
 const script = `(() => {
 const R = [];
