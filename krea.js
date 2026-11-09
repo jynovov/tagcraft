@@ -23,7 +23,6 @@ const state = {
 
 let saved = null;   // 上次状态的内存镜像（render 时同步）
 let pollTimer = null;
-let tickTimer = null;
 
 
 /* ---------------------------------------------------------------- 上次状态 */
@@ -46,7 +45,7 @@ function statePayload() {
 /** 写回唯一那份（render 时自动调用；清空 / 重新生成都会覆盖） */
 function saveWork() {
   saved = Object.assign(statePayload(), { time: Date.now() });
-  try { localStorage.setItem(LS_KREA_CUR, JSON.stringify(saved)); } catch (e) { /* ignore */ }
+  draftStore.save(saved);
 }
 
 /** 只认白名单字段，坏数据丢掉；旧数据缺字段也能读 */
@@ -68,39 +67,18 @@ function normalizeSaved(x) {
   };
 }
 
-/** 读唯一那份；没有（或存的还是旧版 id）就迁移旧数据 */
+/** 读唯一那份；没有（或存的还是旧版格式）就迁移旧数据。
+ *  迁移逻辑在 gen_page.js 的 makeDraftStore 里，和 tag 页共用同一份。 */
 function loadSaved() {
-  let obj = null;
-  try { obj = normalizeSaved(JSON.parse(localStorage.getItem(LS_KREA_CUR) || 'null')); } catch (e) { obj = null; }
-  if (obj) {
-    try { localStorage.removeItem(LS_KREA_WORKS); } catch (e) { /* ignore */ }
-    return obj;
-  }
-  return migrateOld();
+  return draftStore.load();
 }
 
-/** 旧数据迁移：多份里取「当前那一份」，迁移完删旧键 */
-function migrateOld() {
-  let one = null;
-  try {
-    const raw = localStorage.getItem(LS_KREA_WORKS);
-    if (raw) {
-      const list = JSON.parse(raw);
-      if (Array.isArray(list) && list.length) {
-        const oldId = localStorage.getItem(LS_KREA_CUR);
-        one = list.find(d => d && d.id === oldId) || list.find(d => d) || null;
-      }
-      localStorage.removeItem(LS_KREA_WORKS);
-    }
-  } catch (e) {
-    try { localStorage.removeItem(LS_KREA_WORKS); } catch (e2) { /* ignore */ }
-  }
-  const s = normalizeSaved(one);
-  if (s) {
-    try { localStorage.setItem(LS_KREA_CUR, JSON.stringify(s)); } catch (e) { /* ignore */ }
-  }
-  return s;
-}
+// 草稿存取：Krea 页只有「多份 works」这一种老格式（没有更早的单份）
+const draftStore = makeDraftStore({
+  curKey: LS_KREA_CUR,
+  legacyListKey: LS_KREA_WORKS,
+  normalize: normalizeSaved
+});
 
 /** 把一份状态读回界面 */
 function applySaved(s) {
@@ -142,12 +120,52 @@ function wordCount(text) {
   return (String(text || '').match(/[A-Za-z][A-Za-z'-]*/g) || []).length;
 }
 
+/* ---------------- 译成中文（只读展示，不改提示词） ----------------
+ * 后端 /api/translate 走 translate_to_chinese，同文本第二次命中缓存。
+ * 每次生成新提示词都会把这块收起来，避免显示上一次的译文。 */
+function hideTrans() {
+  const box = $('transBox');
+  if (box) box.hidden = true;
+  const out = $('transOut');
+  if (out) { out.textContent = ''; out.classList.remove('loading'); }
+}
+
+async function translatePrompt() {
+  const text = ($('outPrompt').value || '').trim();
+  if (!text) { toast('先生成或填一段英文提示词', true); return; }
+  const box = $('transBox');
+  const out = $('transOut');
+  const btn = $('btnTranslate');
+  if (box) box.hidden = false;
+  if (out) { out.textContent = '翻译中…'; out.classList.add('loading'); }
+  if (btn) btn.disabled = true;
+  try {
+    const st = loadSettings();
+    const r = await api('/api/translate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: text,
+        api: { api_base: st.apiBase || '', model: st.model || '' }
+      })
+    });
+    if (out) { out.textContent = (r && r.translated) || '（没有返回内容）'; out.classList.remove('loading'); }
+  } catch (e) {
+    if (out) { out.textContent = '翻译失败：' + e.message; out.classList.remove('loading'); }
+    toast(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+
 /** 规划面板：实现挪到了 common.js，这里只传本页需要的参数 */
 function renderPlan() {
   renderPlanBox(state.plan, { withQueries: false });
 }
 
 function render() {
+  // 提示词变了就把上一次的译文收起来（免得看到旧翻译）
+  if ($('outPrompt') && $('outPrompt').value !== (state.prompt || '')) hideTrans();
   $('outPrompt').value = state.prompt || '';
   const words = wordCount(state.prompt);
   $('promptCount').innerHTML = '共 <b>' + words + '</b> 词' +
@@ -233,8 +251,7 @@ async function generate() {
     reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 4,
     system_prompt: localStorage.getItem(LS_PROMPT_KREA) || '',
     plan: planOn(),   // 规划展示：关着时后端连那次模型都不调
-    aux_model: auxModelName(),   // 辅助模型（计划/评审）；空 = 主模型
-    api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+    api: { api_base: st.apiBase || '', model: st.model || '' }
   };
   state.lastText = text;
   btn.disabled = true;
@@ -420,18 +437,9 @@ async function resumeJob() {
   return true;
 }
 
-function startTick() {
-  stopTick();
-  tickTimer = setInterval(() => {
-    if (state.progress && !state.progress.done) renderProgress();
-    else stopTick();
-  }, 100);
-}
-
-function stopTick() {
-  clearInterval(tickTimer);
-  tickTimer = null;
-}
+/* 进度计时器：实现挪到 gen_page.js（tag 页与 Krea 页共用一份） */
+function startTick() { startGenTick(state, renderProgress); }
+function stopTick() { stopGenTick(); }
 
 /** 只重画进度块：DOM 只建一次，之后原地更新宽度和文字（避免每帧重建导致闪变） */
 /** 进度条：实现挪到 common.js */
@@ -441,10 +449,9 @@ function renderProgress() {
 
 
 function pushHistory(text) {
-  const list = loadHistory();
   const st = state.stats || {};
   const rv = state.review || {};
-  list.unshift({
+  pushHistoryEntry({
     kind: 'krea', model: 'krea',
     text: text.slice(0, 80),
     full: text,
@@ -458,7 +465,6 @@ function pushHistory(text) {
     score: rv.final_score != null ? rv.final_score : null,
     time: new Date().toLocaleString()
   });
-  saveHistory(list);
 }
 
 /* ---------------------------------------------------------------- 自省重试 */
@@ -477,8 +483,7 @@ async function retryReflect() {
         prompt_model: 'krea',
         prompt: state.prompt,
         reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
-        aux_model: auxModelName(),
-        api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+        api: { api_base: st.apiBase || '', model: st.model || '' }
       })
     });
     state.prompt = r.prompt || state.prompt;
@@ -595,6 +600,8 @@ function init() {
 
   $('btnFav').addEventListener('click', favCurrent);
   $('btnCopyPrompt').addEventListener('click', () => copy($('outPrompt').value));
+  if ($('btnTranslate')) $('btnTranslate').addEventListener('click', translatePrompt);
+  if ($('btnTransClose')) $('btnTransClose').addEventListener('click', hideTrans);
   // krea 页用自己的示例池：场景 / 氛围优先，不要求有人物
   bindExamplePicker('btnExample', 'inputText', saveWork, EXAMPLE_PROMPTS_KREA);
   $('btnSendComfy').addEventListener('click', sendToComfy);

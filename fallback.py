@@ -6,8 +6,11 @@
 翻出来的 tag 再过词表校验；结果按词缓存，同样的词不再花钱。
 """
 
+import json
+import os
 import re
 
+from common import DATA_DIR
 from dict_db import get_tag, split_concept_text
 from llm_client import _extract_json, _post_chat
 
@@ -20,6 +23,11 @@ _FALLBACK_MIN_LEN = 3        # 只看 3 字以上，过滤「穿着」「一个�
 _FALLBACK_CACHE = {}
 _FALLBACK_CACHE_MAX = 256
 
+# 缓存落盘：以前只在内存里，重启服务就丢 → 每次冷启动第一段描述都要多花一次
+# 模型调用（实测约 10 秒，界面还卡在「概念核对」看不出在等什么）。
+_FALLBACK_CACHE_PATH = os.path.join(DATA_DIR, "fallback_cache.json")
+_cache_loaded = False
+
 _FALLBACK_STOPWORDS = {"一个", "一位", "两个", "画面", "这里", "那里", "然后", "而且",
                        "非常", "比较", "还有", "以及", "时候", "样子", "感觉"}
 
@@ -29,8 +37,44 @@ FALLBACK_SYSTEM = """你是 Danbooru 标签词典。用户会给你若干个中�
 不要解释，不要编造不存在的组合。"""
 
 
+def _load_cache():
+    """首次用到时把落盘缓存读回内存（文件坏了就当空，不影响生成）。"""
+    global _cache_loaded
+    if _cache_loaded:
+        return
+    _cache_loaded = True
+    try:
+        with open(_FALLBACK_CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(k, str) and isinstance(v, list):
+                    _FALLBACK_CACHE[k] = [str(x) for x in v][:3]
+    except Exception:  # noqa: BLE001 - 缓存读不出来就当没有
+        pass
+
+
+def _save_cache():
+    """原子写（.tmp + rename）：写到一半断电也不会留下半个 JSON。"""
+    try:
+        os.makedirs(os.path.dirname(_FALLBACK_CACHE_PATH), exist_ok=True)
+        tmp = _FALLBACK_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_FALLBACK_CACHE, f, ensure_ascii=False)
+        os.replace(tmp, _FALLBACK_CACHE_PATH)
+    except Exception:  # noqa: BLE001 - 存不了就算了，下次再说
+        pass
+
+
+def pending_words(words):
+    """这批词里还要问模型的有哪些（缓存里已有答案的不算）。"""
+    _load_cache()
+    return [w for w in (words or []) if w and w not in _FALLBACK_CACHE]
+
+
 def uncovered_words(text, concept_map=None):
     """描述里没被本地概念覆盖的中文短语（3 字以上，去重，最多 5 个）。"""
+    _load_cache()
     s = str(text or "")
     covered = set()
     for c in ((concept_map or {}).get("confirmed") or []):
@@ -70,6 +114,7 @@ def batch_fallback_words(cfg, words, model="", stats=None):
     words = [w for w in (words or []) if w][:_FALLBACK_MAX_WORDS]
     if not words:
         return []
+    _load_cache()
     todo = [w for w in words if w not in _FALLBACK_CACHE]
 
     if todo and len(words) >= _FALLBACK_MIN_WORDS:
@@ -110,6 +155,7 @@ def batch_fallback_words(cfg, words, model="", stats=None):
         if len(_FALLBACK_CACHE) > _FALLBACK_CACHE_MAX:
             for k in list(_FALLBACK_CACHE)[:64]:
                 _FALLBACK_CACHE.pop(k, None)
+        _save_cache()                      # 落盘：重启后不用再为同样的词花钱
 
     return [(w, _FALLBACK_CACHE[w]) for w in words if _FALLBACK_CACHE.get(w)]
 

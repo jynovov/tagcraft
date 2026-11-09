@@ -96,6 +96,9 @@ def _review_score(crit, weights):
 # 和 LLM 自省的区别：默认 0 次模型调用（省 2 次），且每轮的分数照样记下来。
 _RULE_COUNT_TAGS = {"1girl", "1boy", "2girls", "2boys", "multiple_girls",
                     "multiple_boys", "solo", "couple"}
+# 景别/构图骨架 tag：去近义重复时不许删
+_RULE_SHOT_TAGS = {"close-up", "upper_body", "full_body", "wide_shot",
+                   "cowboy_shot", "lower_body", "portrait"}
 
 
 # 语义类的线索词：描述里提到、但正向里整类都缺，说明真的漏了
@@ -133,6 +136,44 @@ def _near_duplicate_pairs(names, group_of):
     return pairs
 
 
+def dedupe_near_duplicates(positive):
+    """去掉被更具体写法覆盖的通用 tag（thighhighs 被 white_thighhighs 覆盖）。
+
+    纯本地、确定性：同组里词面互相包含时，只留下更具体的那个。这样冗余项不再
+    掉分，也就不会为了几对近义重复去白跑一轮模型修复（那轮通常还越修越差）。
+    返回 (保留的 hits, 被去掉的 tag 列表)。
+    """
+    hits = list(positive or [])
+    names = [str((h or {}).get("tag") or "").strip().lower() for h in hits]
+    # 质量词由固定模板决定，不参与近义去重（aesthetic / very_aesthetic 这类都要留着）
+    quality = {str((h or {}).get("tag") or "").strip().lower()
+               for h in hits if str((h or {}).get("policy") or "") == "quality"}
+    try:
+        records = get_tags(names)
+    except Exception:  # noqa: BLE001
+        records = {}
+    group_of = {t: tag_order_group(t, (records.get(t) or {}).get("category"))
+                for t in set(names) if t}
+    drop = set()
+    for a, b in _near_duplicate_pairs([n for n in names if n], group_of):
+        if a in quality or b in quality:
+            continue
+        wa, wb = set(a.split("_")), set(b.split("_"))
+        shorter = a if len(wa) <= len(wb) else b
+        longer = b if shorter == a else a
+        # 人数/景别这类骨架 tag 是画面骨架，不能删；撞车的是它的时候删掉更长的那条
+        # （solo + solo_focus → 只留 solo）。以前这里直接放过，下一轮才发现近义重复。
+        if shorter in _RULE_COUNT_TAGS or shorter in _RULE_SHOT_TAGS:
+            if longer not in _RULE_COUNT_TAGS and longer not in _RULE_SHOT_TAGS:
+                drop.add(longer)
+            continue
+        drop.add(shorter)
+    if not drop:
+        return hits, []
+    kept = [h for h in hits if str((h or {}).get("tag") or "").strip().lower() not in drop]
+    return kept, sorted(drop)
+
+
 def rule_score(text, positive, unknown=None, concept_map=None, max_tags=45):
     """本地打分：返回 (0~100 总分, 五项 0~5 分项, 问题列表)。纯本地、确定性。"""
     hits = list(positive or [])
@@ -142,9 +183,21 @@ def rule_score(text, positive, unknown=None, concept_map=None, max_tags=45):
     problems = []
 
     # 覆盖：已确认的概念是否都在正向 + 人数骨架有没有
-    want = [str(c.get("tag") or "").lower()
-            for c in ((concept_map or {}).get("confirmed") or [])]
+    # 角色还会带一个作品 tag（vocaloid 这类），它同样要出现在正向里，一起算覆盖
+    want = []
+    for c in ((concept_map or {}).get("confirmed") or []):
+        t = str(c.get("tag") or "").lower()
+        if t and t not in want:
+            want.append(t)
+        s = str(c.get("series") or "").lower()
+        if s and s not in want:
+            want.append(s)
     cover_ratio = (len([t for t in want if t in uniq]) / float(len(want))) if want else 1.0
+    missing_concepts = [t for t in want if t not in uniq]
+    if missing_concepts:
+        # 说清楚缺哪一个，修复才有事可做。以前这里只扣分不报问题，导致
+        # 「93 分、覆盖 4/5」时 problems 是空的，下游只能补一条空泛的问题硬叫一轮模型。
+        problems.append("缺要素：%s 还没落到正向 tag 上" % "、".join(missing_concepts[:3]))
     if not (uniq & _RULE_COUNT_TAGS):
         cover_ratio *= 0.6
         problems.append("缺人数 tag（1girl / 1boy / 2girls 这类）")

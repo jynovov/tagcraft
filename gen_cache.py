@@ -38,13 +38,33 @@ def enabled(cfg=None):
     return True
 
 
+def code_version():
+    """代码版本指纹：核心生成链路几个文件的 mtime + size。
+
+    为什么需要：改完代码再跑同一段描述，会命中旧缓存、原样返回旧结果
+    （统计里还写着 cached: true），很容易被误判成「改动没生效」。
+    把版本掺进 key，代码一动缓存自动失效，不用再手动清。
+    """
+    h = hashlib.sha256()
+    root = os.path.dirname(os.path.abspath(__file__))
+    for name in ("agent_core.py", "mapping.py", "scoring.py", "frame.py", "fallback.py",
+                 "ordering.py", "character_db.py", "gen_service.py", "llm_client.py"):
+        path = os.path.join(root, name)
+        try:
+            st = os.stat(path)
+            h.update(("%s:%d:%d;" % (name, int(st.st_mtime), st.st_size)).encode("utf-8"))
+        except OSError:
+            h.update((name + ":missing;").encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
 def make_key(kind, text, cfg, prompt_model, **opts):
-    """同一段描述 + 同一模型/参数才算同一次请求。"""
+    """同一段描述 + 同一模型/参数 + 同一份代码，才算同一次请求。"""
     parts = {
         "kind": kind,
+        "code": code_version(),
         "text": (text or "").strip(),
         "model": (cfg or {}).get("model") or "",
-        "aux_model": (cfg or {}).get("aux_model") or "",
         "api_base": (cfg or {}).get("api_base") or "",
         "prompt_model": prompt_model,
         "opts": {k: opts[k] for k in sorted(opts)},

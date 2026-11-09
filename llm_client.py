@@ -93,6 +93,16 @@ KREA_SYSTEM_PROMPT = """你是英文图像提示词（prompt）工程师，服�
 {"prompt": "英文自然语言提示词", "notes": "一句话说明取舍（中文）"}
 """
 
+TRANSLATE_SYSTEM = """你是提示词翻译。用户会给你一段英文图像提示词，请翻译成简体中文。
+
+规则：
+1. 只输出译文本身：不要解释、不要加引号、不要写「翻译：」这类前缀，不要分点。
+2. 按原文的叙述顺序译，画面细节（服装、颜色、光线、镜头、材质）一个都不能丢。
+3. 摄影/电影术语用中文常用说法（close-up→特写、shallow depth of field→浅景深、rim light→轮廓光）。
+4. 原文里的专有名词（角色名、作品名、画师名、LoRA 名）保留原文，不要音译。
+5. 译文读起来要像一段通顺的中文画面描述，不要逐词硬翻。
+"""
+
 
 TRANSIENT_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
@@ -221,6 +231,27 @@ def call_llm(cfg, user_text, extra_rules="", max_tags=45, temperature=0.6,
         raise RuntimeError("接口返回格式异常：%s" % json.dumps(body, ensure_ascii=False)[:400])
     parsed = _extract_json(content)
     return content, parsed, body.get("usage") or {}
+
+
+def translate_to_chinese(cfg, text, temperature=0.2, limit=6000):
+    """把一段英文提示词翻成简体中文（与生成用同一个模型）。
+
+    只做翻译：不解释、不加引号、不改写内容；返回译文（失败由调用方兜底）。
+    """
+    body = _post_chat(cfg, {
+        "model": (cfg.get("model") or "").strip(),
+        "messages": [
+            {"role": "system", "content": TRANSLATE_SYSTEM},
+            {"role": "user", "content": str(text or "")[:limit]},
+        ],
+        "temperature": float(temperature),
+        "stream": False,
+    })
+    try:
+        out = body["choices"][0]["message"].get("content") or ""
+    except Exception:  # noqa: BLE001
+        raise RuntimeError("接口返回格式异常：%s" % json.dumps(body, ensure_ascii=False)[:300])
+    return out.strip()
 
 
 def _extract_json(text):

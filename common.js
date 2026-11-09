@@ -12,13 +12,11 @@ let QUALITY_TAGS = new Set([
 
 /* 一键预设：都核对过确实存在（质量词是模型美学词，不是 Danbooru tag） */
 const QUALITY_PRESET = ['masterpiece', 'best_quality', 'absurdres', 'very_aesthetic'];
-const LS_SETTINGS = 'tagcraft.settings';
-const LS_HISTORY = 'tagcraft.history';
-const LS_PROMPT = 'tagcraft.prompt';            // NoobAI 系的系统提示词
-const LS_PROMPT_KREA = 'tagcraft.prompt.krea';  // Krea 2 的系统提示词
-const LS_FAVS = 'tagcraft.favs';
-const LS_COMFY = 'tagcraft.comfy';
-const LS_PLAN = 'tagcraft.plan';                 // 规划展示开关："1" 开 / 其它（含未设置）关
+
+
+
+
+                 // 规划展示开关："1" 开 / 其它（含未设置）关
 
 const ICONS = {
   gen: '<path d="M3 11.2V4.5A1.5 1.5 0 014.5 3h6.7a1.5 1.5 0 011.06.44l8.3 8.3a1.5 1.5 0 010 2.12l-6.7 6.7a1.5 1.5 0 01-2.12 0l-8.3-8.3A1.5 1.5 0 013 11.2z"/><circle cx="7.6" cy="7.6" r="1.4"/>',
@@ -74,12 +72,14 @@ function renderModelSwitch(active) {
   host.innerHTML = '<div class="mswitch-row">' +
     '<span class="mswitch-cap">模式</span>' +
     '<div class="mswitch" role="tablist" aria-label="切换提示词模式">' +
+    '<span class="mswitch-thumb" aria-hidden="true"></span>' +
     PROMPT_MODELS.map(m => `
       <a class="mswitch-item${m.key === active ? ' active' : ''}" href="${m.href}"
          role="tab" data-model="${m.key}" aria-selected="${m.key === active}">
         <span class="mswitch-name">${m.label}</span>
       </a>`).join('') +
     '</div></div>';
+  placeModelSwitchThumb(host);
 }
 
 /** 是不是 Krea2 的记录（收藏 / 历史里两种记录混在一起存） */
@@ -87,35 +87,21 @@ function isKreaRecord(item) {
   return !!item && (item.kind === 'krea' || item.model === 'krea');
 }
 
-/* ---------------------------------------------------------------- 按钮动效
- * 点击波纹 + 受 CSS 控制的按压/悬浮；纯装饰，动画结束自己删掉节点。
- * 尊重系统「减少动态效果」设置（CSS 里已处理）。                          */
-function initButtonFx() {
-  if (window.__btnFx) return;
-  window.__btnFx = true;
-  document.addEventListener('pointerdown', function (ev) {
-    const t = ev.target;
-    const b = t && t.closest ? t.closest('button, .mswitch-item') : null;
-    if (!b || b.disabled) return;
-    const rect = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
-    if (!rect) return;
-    const size = Math.max(rect.width, rect.height) * 1.1 || 60;
-    const cx = (typeof ev.clientX === 'number' ? ev.clientX : rect.left + rect.width / 2);
-    const cy = (typeof ev.clientY === 'number' ? ev.clientY : rect.top + rect.height / 2);
-    const rip = document.createElement('span');
-    rip.className = 'ripple';
-    rip.style.width = size + 'px';
-    rip.style.height = size + 'px';
-    rip.style.left = (cx - rect.left - size / 2) + 'px';
-    rip.style.top = (cy - rect.top - size / 2) + 'px';
-    b.appendChild(rip);
-    setTimeout(() => { if (rip.remove) rip.remove(); }, 620);
-  });
-}
 
-if (typeof document !== 'undefined' && document.addEventListener) {
-  document.addEventListener('DOMContentLoaded', initButtonFx);
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 async function shutdown() {
   if (!confirm('关闭 TagCraft 本地服务？\n关闭后网页就不能用了，需要重新双击图标启动。')) return;
@@ -137,7 +123,6 @@ async function api(path, opts) {
   return data;
 }
 
-let toastTimer = null;
 /* 服务端下发的常量（/api/status.constants）：质量词、负向、模板 tag 的中文名 */
 let APP_CONST = {
   quality: [], quality_tags: [], negative: [], negative_text: '', tag_cn: {}, limits: {}
@@ -150,93 +135,6 @@ function applyConstants(c) {
     QUALITY_TAGS = new Set(c.quality_tags);
   }
 }
-
-function toast(msg, bad) {
-  let el = document.querySelector('.toast');
-  if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
-  el.textContent = msg;
-  el.className = 'toast show' + (bad ? ' bad' : '');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
-}
-
-function loadSettings() {
-  try { return JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}'); } catch (e) { return {}; }
-}
-function saveSettings(s) { localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); }
-
-/* ---- 规划展示：默认关。关着时后端完全不调那次规划模型 ---- */
-function planOn() {
-  return localStorage.getItem(LS_PLAN) === '1';
-}
-function savePlanOn(on) {
-  localStorage.setItem(LS_PLAN, on ? '1' : '0');
-}
-
-/* ---- 辅助模型：默认空（= 主模型）。计划/评审这些辅助步骤用它 ---- */
-function auxModelName() {
-  const s = loadSettings();
-  return String(s.auxModel || '').trim();
-}
-function saveAuxModel(name) {
-  const s = loadSettings();
-  s.auxModel = String(name || '').trim();
-  saveSettings(s);
-}
-
-/* ---- 历史记录：只保留最近 HISTORY_MAX 条 ---- */
-const HISTORY_MAX = 30;
-function loadHistory() {
-  try {
-    const list = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
-    return (Array.isArray(list) ? list : []).slice(0, HISTORY_MAX);
-  } catch (e) { return []; }
-}
-function saveHistory(list) {
-  localStorage.setItem(LS_HISTORY, JSON.stringify((list || []).slice(0, HISTORY_MAX)));
-}
-
-/* ---- 收藏：存的是「描述 + 整套 tag」，不是单个 tag ---- */
-function loadFavs() {
-  try {
-    const list = JSON.parse(localStorage.getItem(LS_FAVS) || '[]');
-    // 过滤掉早期版本按单个 tag 收藏的旧数据（没有 id / pos 字段）
-    return (Array.isArray(list) ? list : []).filter(f => f && f.id && (f.pos || f.text));
-  } catch (e) { return []; }
-}
-function saveFavs(list) { localStorage.setItem(LS_FAVS, JSON.stringify(list.slice(0, 120))); }
-function addFav(item) {
-  const list = loadFavs();
-  list.unshift(item);
-  saveFavs(list);
-  return list.length;
-}
-function delFav(id) {
-  const list = loadFavs().filter(f => f.id !== id);
-  saveFavs(list);
-  return list.length;
-}
-/** 用当前这套（描述 + tag / 提示词）造一条收藏记录；extra 可以带 kind 等额外字段 */
-function makeFav(text, quality, pos, neg, extra) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  // 只留一个很短的标签名；完整描述收在折叠区里（考虑隐私，列表页不直接暴露内容）
-  const label = clean.length > 12 ? clean.slice(0, 12) + '…' : clean;
-  return Object.assign({
-    id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    title: label || '未命名',
-    text: text || '',
-    quality: quality || [], pos: pos || [], neg: neg || [],
-    time: new Date().toLocaleString()
-  }, extra || {});
-}
-
-/* ---- ComfyUI 配置 ---- */
-function loadComfy() {
-  try { return JSON.parse(localStorage.getItem(LS_COMFY) || '{}'); } catch (e) { return {}; }
-}
-function saveComfy(c) { localStorage.setItem(LS_COMFY, JSON.stringify(c)); }
-
-
 function isQuality(chip) {
   return chip.category === 5 || chip.policy === 'quality' ||
          QUALITY_TAGS.has(String(chip.tag || '').toLowerCase());
@@ -405,6 +303,8 @@ document.addEventListener('click', e => {
   if (e.target.closest('.example-pop') || e.target.closest('#btnExample')) return;
   document.querySelectorAll('.example-pop').forEach(p => p.remove());
 });
+
+
 
 /* ---------------------------------------------------------------- 历史统计
  * 历史页顶部那条统计：未识别率、平均自省分、平均耗时、模式分布。
@@ -605,6 +505,8 @@ function renderPlanBox(plan, opt) {
   const box = $(o.box || 'planBox');
   if (!box) return;
   const body = $(o.body || 'plan');
+  // 折叠动画进行中：先不要重绘这块（重绘会把高度过渡打断）
+  if (foldBusy(body)) { body._foldPending = () => renderPlanBox(plan, opt); return; }
   const sum = $(o.sum || 'planSum');
   const els = (plan && Array.isArray(plan.elements)) ? plan.elements : [];
   const qs = (o.withQueries && plan && Array.isArray(plan.queries)) ? plan.queries : [];
@@ -718,6 +620,7 @@ function renderReviewBox(rv, opt) {
   const o = opt || {};
   const box = $(o.box || 'reviewBox');
   const body = $(o.body || 'review');
+  if (foldBusy(body)) { body._foldPending = () => renderReviewBox(rv, opt); return; }
   const sum = $(o.sum || 'reviewSum');
   if (!rv) { box.hidden = true; body.innerHTML = ''; return; }
   box.hidden = false;
@@ -785,6 +688,7 @@ function renderTraceBox(trace, opt) {
   const tr = trace || [];
   const box = $(o.box || 'traceBox');
   const body = $(o.body || 'trace');
+  if (foldBusy(body)) { body._foldPending = () => renderTraceBox(trace, opt); return; }
   const sum = $(o.sum || 'traceSum');
   const extra = o.extraHtml || '';
   if (!tr.length && !extra) { box.hidden = true; body.innerHTML = ''; return; }

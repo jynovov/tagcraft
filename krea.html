@@ -10,7 +10,7 @@
 <div class="shell">
   <div id="sidebar"></div>
 
-  <div class="main">
+  <div class="main main-split">
     <div class="page-head">
       <h1 class="page-title">Krea 2 提示词</h1>
       <span class="head-right">
@@ -76,10 +76,20 @@
           <div class="row">
             <span id="promptCount" class="prompt-count">0 词</span>
             <span class="spacer" style="flex:1"></span>
+            <button id="btnTranslate" class="small">译成中文</button>
             <button id="btnCopyPrompt" class="small primary">复制提示词</button>
           </div>
+          <!-- 译文块：默认不显示，点「译成中文」才出现（只读，不改进提示词） -->
+          <div id="transBox" class="trans-box" hidden>
+            <div class="trans-head">
+              <span>中文翻译</span>
+              <span class="spacer"></span>
+              <button id="btnTransClose" class="small ghost">收起</button>
+            </div>
+            <div id="transOut" class="trans-out"></div>
+          </div>
           <div class="row">
-            <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
+            <button id="btnSendComfy" class="primary small">发送到 ComfyUI</button>
             <a href="/comfy.html" class="page-sub">去配置 ComfyUI →</a>
           </div>
         </div>
@@ -88,7 +98,10 @@
   </div>
 </div>
 
+<script src="store.js"></script>
+<script src="ui_fx.js"></script>
 <script src="common.js"></script>
+<script src="gen_page.js"></script>
 <script src="krea.js"></script>
 </body>
 </html>

@@ -58,7 +58,7 @@ function statePayload() {
 /** 写回唯一那份（render 时自动调用；清空 / 重新生成都会覆盖） */
 function saveWork() {
   saved = Object.assign(statePayload(), { time: Date.now() });
-  try { localStorage.setItem(LS_CUR, JSON.stringify(saved)); } catch (e) { /* ignore */ }
+  draftStore.save(saved);
 }
 
 /** 只认白名单字段，坏数据丢掉；旧数据缺字段也能读 */
@@ -84,48 +84,19 @@ function normalizeSaved(x) {
   };
 }
 
-/** 读唯一那份；没有（或存的还是旧版 id）就迁移旧数据 */
+/** 读唯一那份；没有（或存的还是旧版格式）就迁移旧数据。
+ *  迁移逻辑在 gen_page.js 的 makeDraftStore 里，和 Krea 页共用同一份。 */
 function loadSaved() {
-  let obj = null;
-  try { obj = normalizeSaved(JSON.parse(localStorage.getItem(LS_CUR) || 'null')); } catch (e) { obj = null; }
-  if (obj) {
-    try { localStorage.removeItem(LS_WORKS_OLD); localStorage.removeItem(LS_WORK_OLD); } catch (e) { /* ignore */ }
-    return obj;
-  }
-  return migrateOld();
+  return draftStore.load();
 }
 
-/** 旧数据迁移：多份里取「当前那一份」，更早的单份也接住；迁移完删旧键 */
-function migrateOld() {
-  let one = null;
-  try {
-    const raw = localStorage.getItem(LS_WORKS_OLD);
-    if (raw) {
-      const list = JSON.parse(raw);
-      if (Array.isArray(list) && list.length) {
-        const oldId = localStorage.getItem(LS_CUR);
-        one = list.find(d => d && d.id === oldId) || list.find(d => d) || null;
-      }
-      localStorage.removeItem(LS_WORKS_OLD);
-    }
-  } catch (e) {
-    try { localStorage.removeItem(LS_WORKS_OLD); } catch (e2) { /* ignore */ }
-  }
-  if (!one) {
-    try {
-      const old = localStorage.getItem(LS_WORK_OLD);
-      if (old) one = JSON.parse(old);
-      localStorage.removeItem(LS_WORK_OLD);
-    } catch (e) {
-      try { localStorage.removeItem(LS_WORK_OLD); } catch (e2) { /* ignore */ }
-    }
-  }
-  const s = normalizeSaved(one);
-  if (s) {
-    try { localStorage.setItem(LS_CUR, JSON.stringify(s)); } catch (e) { /* ignore */ }
-  }
-  return s;
-}
+// 草稿存取：当前键 + 两种老格式（多份 works / 单份 work）
+const draftStore = makeDraftStore({
+  curKey: LS_CUR,
+  legacyListKey: LS_WORKS_OLD,
+  legacyOneKey: LS_WORK_OLD,
+  normalize: normalizeSaved
+});
 
 /** 把一份状态读回界面 */
 function applySaved(s) {
@@ -197,11 +168,20 @@ function negChip(c, i) {
       <span class="x" data-del="${i}" data-kind="neg">×</span></div>`;
 }
 
+// 分类名：只用于 chip 的 title 提示，不参与配色（见下面 chip() 的注释）
+const CAT_CN = { 0: '常规', 1: '画师', 3: '作品', 4: '角色', 5: '元数据' };
+
 function chip(c, i, kind) {
   const w = c.weight && c.weight !== 1 ? `<span class="w">${c.weight.toFixed(1)}</span>` : '';
+  const cat = CAT_CN[c.category];
+  const tip = [
+    c.cn || '',
+    cat && c.category !== 0 ? cat + ' tag' : '',
+    c.post_count ? c.post_count.toLocaleString() + ' 次' : ''
+  ].filter(Boolean).join(' · ');
   return `<div class="tag cat${c.category}" draggable="true" data-kind="${kind}" data-i="${i}"
-      title="${c.cn || ''}${c.post_count ? ' · ' + c.post_count.toLocaleString() + ' 次' : ''}">
-      <span class="t">${c.tag}</span>${c.cn ? `<span class="cn">${c.cn}</span>` : ''}${w}
+      title="${escHtml(tip)}">
+      <span class="t">${c.tag}</span>${c.cn ? `<span class="cn">${escHtml(c.cn)}</span>` : ''}${w}
       <span class="x" data-del="${i}" data-kind="${kind}">×</span></div>`;
 }
 
@@ -323,9 +303,8 @@ async function retryReflect() {
         text: $('inputText').value,
         positive: tags,
         negative: [],
-        reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 2,
-        aux_model: auxModelName(),
-        api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+        reflect_rounds: st.reflectRounds != null ? +st.reflectRounds : 1,
+        api: { api_base: st.apiBase || '', model: st.model || '' }
       })
     });
     applyResult(r);
@@ -542,7 +521,6 @@ function tidy() {
 
 const LS_JOB = 'tagcraft.job';    // 正在跑的智能体任务号（放在 sessionStorage，切页回来还能接上）
 let pollTimer = null;
-let tickTimer = null;
 
 /** 把一次生成的结果填进界面并收尾 */
 function finishGenerate(r, ms) {
@@ -577,11 +555,10 @@ async function generate() {
     temperature: st.temperature ? +st.temperature : 0.6,
     max_rounds: st.agentRounds ? +st.agentRounds : 6,
     reflect: $('useAgent').checked,   // 自省开关（生成页）
-    reflect_rounds: st.reflectRounds ? +st.reflectRounds : 2,
+    reflect_rounds: st.reflectRounds ? +st.reflectRounds : 1,
     system_prompt: localStorage.getItem(LS_PROMPT) || '',
     plan: planOn(),                 // 规划展示：关着时后端连那次模型都不调
-    aux_model: auxModelName(),      // 辅助模型（计划/评审）；空 = 主模型
-    api: { api_base: st.apiBase || '', api_key: st.apiKey || '', model: st.model || '' }
+    api: { api_base: st.apiBase || '', model: st.model || '' }
   };
   state.lastText = text;
   // 生成前正负两个输出框都清空，负向等生成完由服务端填固定通用负向
@@ -773,18 +750,9 @@ async function resumeJob() {
   return true;
 }
 
-function startTick() {
-  stopTick();
-  tickTimer = setInterval(() => {
-    if (state.progress && !state.progress.done) renderProgress();
-    else stopTick();
-  }, 100);
-}
-
-function stopTick() {
-  clearInterval(tickTimer);
-  tickTimer = null;
-}
+/* 进度计时器：实现挪到 gen_page.js（tag 页与 Krea 页共用一份） */
+function startTick() { startGenTick(state, renderProgress); }
+function stopTick() { stopGenTick(); }
 
 /** 进度条：实现挪到 common.js */
 function renderProgress() {
@@ -793,17 +761,16 @@ function renderProgress() {
 
 
 function pushHistory(text) {
-  const list = loadHistory();
   const st = state.stats || {};
   const rv = state.review || {};
-  list.unshift({
+  pushHistoryEntry({
     kind: 'tag',
     text: text.slice(0, 80),
     full: text,
     quality: state.quality.map(c => c.tag),
     pos: state.positive.map(c => c.tag),
     neg: [],
-  negText: state.negText,
+    negText: state.negText,
     stats: {
       llm_calls: st.model || 0,
       tool_calls: st.tool_calls || 0,
@@ -814,7 +781,6 @@ function pushHistory(text) {
     score: rv.final_score != null ? rv.final_score : null,
     time: new Date().toLocaleString()
   });
-  saveHistory(list);
 }
 
 /* ---------------------------------------------------------------- 收藏这一套 */

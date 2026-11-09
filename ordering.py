@@ -178,10 +178,14 @@ def tag_order_group(tag, category=None):
         return ORDER_QUALITY
     if category is None:
         category = _tag_category(name)
-    # 词表分类优先：角色名算人物，画师/作品算风格来源
+    # 词表分类优先：角色名算人物，作品/系列跟着角色走，画师算风格来源
     if category == 4:
         return ORDER_CHARACTER
-    if category in (1, 3):
+    if category == 3:
+        # 作品 tag（vocaloid / touhou 这类）以前被归到「风格」，会排到服装、动作
+        # 后面去；Danbooru 的写法是角色后面紧跟作品，缺了它模型容易画成「像但不是」。
+        return ORDER_CHARACTER
+    if category == 1:
         return ORDER_STYLE
     # 构图/留白：独立小组，位置固定在动作之后、场景之前（不再混进人数/构图）
     if name in _NEGSPACE_TAGS:

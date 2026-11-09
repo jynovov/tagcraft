@@ -10,7 +10,7 @@
 <div class="shell">
   <div id="sidebar"></div>
 
-  <div class="main">
+  <div class="main main-split">
     <div class="page-head">
       <h1 class="page-title">中文转 tag</h1>
       <span class="head-right">
@@ -145,7 +145,7 @@
           <textarea id="outNeg" rows="3" class="mono"></textarea>
           <div class="row">
             <button id="btnCopyNeg" class="small">复制负向</button>
-            <button id="btnSendComfy" class="primary wide">发送到 ComfyUI</button>
+            <button id="btnSendComfy" class="primary small">发送到 ComfyUI</button>
           </div>
           <div class="row">
               </div>
@@ -155,7 +155,10 @@
   </div>
 </div>
 
+<script src="store.js"></script>
+<script src="ui_fx.js"></script>
 <script src="common.js"></script>
+<script src="gen_page.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

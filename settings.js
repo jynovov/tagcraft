@@ -60,30 +60,70 @@ async function loadStatus() {
     $('systemPromptKrea').placeholder =
       '服务端没返回 Krea2 提示词，可能还是旧版本：重启 TagCraft 后这里会自动填上';
   }
+
+  // Key 状态：只说有/没有，前端永远拿不到 Key 本身
+  const configured = !!(st.llm && st.llm.configured);
+  const el = $('keyState');
+  if (el) {
+    el.textContent = configured ? '后端已配置 Key' : '后端还没有 Key';
+    el.style.color = configured ? 'var(--ok)' : 'var(--bad)';
+  }
+  if (!configured) await migrateKey();
 }
 
 function fill() {
   const s = loadSettings();
   $('apiBase').value = s.apiBase || '';
   $('model').value = s.model || '';
-  $('auxModel').value = s.auxModel || '';
-  $('apiKey').value = s.apiKey || '';
+  // Key 不再回填：它只存在后端 config.json，浏览器里不留
+  $('apiKey').value = '';
   $('temperature').value = s.temperature || 0.6;
   $('agentRounds').value = s.agentRounds || 6;
-  $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 2;
+  $('reflectRounds').value = s.reflectRounds != null ? s.reflectRounds : 1;
   $('plan').checked = planOn();
+  const sc = s.uiScale || 1;
+  if ($('uiScale')) $('uiScale').value = String(sc);
+  applyUiScale(sc);
 }
 
 function collect() {
   return {
     apiBase: $('apiBase').value.trim(),
     model: $('model').value.trim(),
-    auxModel: $('auxModel').value.trim(),
-    apiKey: $('apiKey').value.trim(),
     temperature: $('temperature').value,
     agentRounds: +$('agentRounds').value || 6,
     reflectRounds: +$('reflectRounds').value || 0
   };
+}
+
+/** 把 Key 写到后端 config.json；成功后清空输入框（浏览器不保留） */
+async function saveKeyToBackend(key) {
+  const r = await api('/api/config', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: key })
+  });
+  const ok = !!(r && r.configured);
+  const el = $('keyState');
+  if (el) {
+    el.textContent = ok ? '后端已配置 Key' : '后端还没有 Key';
+    el.style.color = ok ? 'var(--ok)' : 'var(--bad)';
+  }
+  return ok;
+}
+
+/** 老版本把 Key 存在 localStorage：这里一次性搬到后端，然后从浏览器删掉 */
+async function migrateKey() {
+  const s = loadSettings();
+  if (!s.apiKey) return;
+  try {
+    await saveKeyToBackend(s.apiKey);
+    const next = Object.assign({}, s);
+    delete next.apiKey;
+    saveSettings(next);
+    toast('已把浏览器里的 Key 迁移到后端并删除本地副本');
+  } catch (e) {
+    toast('Key 迁移失败：' + e.message, true);
+  }
 }
 
 function init() {
@@ -100,7 +140,7 @@ function init() {
 
   // 概念核对没有开关：tag 模式始终开启。
   // 改动即存：输入框、下拉、勾选框都绑上（防抖 400ms）
-  ['apiBase', 'model', 'auxModel', 'apiKey', 'temperature', 'agentRounds', 'reflectRounds',
+  ['apiBase', 'model', 'temperature', 'agentRounds', 'reflectRounds',
    'systemPrompt', 'systemPromptKrea'].forEach(id => {
     const el = $(id);
     el.addEventListener('input', queueSave);
@@ -111,6 +151,33 @@ function init() {
     persist();
     toast('已保存');
   });
+
+  // Key：只写后端，不落浏览器
+  $('btnSaveKey').addEventListener('click', async () => {
+    const key = $('apiKey').value.trim();
+    if (!key) { toast('先填一个 Key', true); return; }
+    $('btnSaveKey').disabled = true;
+    try {
+      const ok = await saveKeyToBackend(key);
+      $('apiKey').value = '';
+      toast(ok ? 'Key 已保存到后端（浏览器不留副本）' : '保存了，但后端读不到 Key', !ok);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      $('btnSaveKey').disabled = false;
+    }
+  });
+
+  // 界面缩放
+  if ($('uiScale')) {
+    $('uiScale').addEventListener('change', () => {
+      const v = Number($('uiScale').value) || 1;
+      applyUiScale(v);
+      const s = loadSettings();
+      saveSettings(Object.assign({}, s, { uiScale: v }));
+      toast('界面缩放 ' + Math.round(v * 100) + '%');
+    });
+  }
 
   $('btnSavePrompt').addEventListener('click', () => {
     persist();
@@ -136,11 +203,13 @@ function init() {
 
   $('btnTest').addEventListener('click', async () => {
     const s = collect();
+    // 输入框里填了就用它（临时试连），留空则用后端已保存的 Key
+    const typed = ($('apiKey').value || '').trim();
     $('testMsg').textContent = '测试中…';
     try {
       const r = await api('/api/llm/test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api: { api_base: s.apiBase, api_key: s.apiKey, model: s.model } })
+        body: JSON.stringify({ api: { api_base: s.apiBase, api_key: typed, model: s.model } })
       });
       $('testMsg').textContent = '连接正常 · ' + (r.reply || 'ok');
       toast('连接正常');
