@@ -15,6 +15,7 @@ import urllib.request
 import webbrowser
 
 import lc_tools
+import character_db
 
 from dict_db import (QUALITY_TAGS, get_tag, get_tags, local_concepts, resolve_alias,
                      search_tags, split_concept_text, suggest_for, validate_tags)
@@ -483,7 +484,7 @@ def prefetch_trace_summary(detail):
 
 
 # 词表工具已拆到 tools.py；这里转发名字，调用方不用改
-from tools import (run_tool, tool_get_tag, tool_payload, tool_search_tags,  # noqa: E402
+from llm_tools import (run_tool, tool_get_tag, tool_payload, tool_search_tags,  # noqa: E402
                    tool_suggest_tags, tool_validate_tags, _NOOB_TOOL_FUNCS)
 
 
@@ -561,18 +562,19 @@ from ordering import (NEGSPACE_CONFLICT_SUMMARY, ORDER_ACTION, ORDER_BACKGROUND,
 
 
 # 批量兜底与框架补全都拆到独立模块，这里只转发名字（对外接口不变）
-from fallback import (batch_fallback_words, fallback_block, uncovered_words)  # noqa: E402
+from fallback import (batch_fallback_words, fallback_block, pending_words,  # noqa: E402
+                      uncovered_words)
 from frame import (ensure_frame, frame_tags, frame_trace, is_quality_tag,  # noqa: E402
                    negative_tags)
 
 
-def _stage_plan(cfg, text, natural, temperature, aux, emit, say, trace, stats, system):
+def _stage_plan(cfg, text, natural, temperature, model, emit, say, trace, stats, system):
     """规划展示 + 计划预查。返回 (plan_info, system, prefetch_tags)；失败只记轨迹。"""
     plan_info = None
     prefetch_tags = []
     say("正在规划画面要素与查词方向…" if not natural else "正在规划画面要素…", 5)
     plan_info, plan_err = plan_generate(cfg, text, natural=natural,
-                                        temperature=temperature, model=aux)
+                                        temperature=temperature, model=model)
     stats["llm_calls"] += 1
     if plan_info:
         if emit:
@@ -624,6 +626,15 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
     }
     # 服务端确定性排序（不靠模型）：自省前先排好，评审看到的顺序才是最终顺序
     out["positive"] = reorder_hits(out["positive"])
+    # 近义重复本地清理（thighhighs 被 white_thighhighs 覆盖这类）：纯本地、确定性。
+    # 不去问模型——那一轮修复很贵（实测约 9 秒），而且经常越修越差。
+    out["positive"], dropped = dedupe_near_duplicates(out["positive"])
+    if dropped:
+        out["positive"] = reorder_hits(out["positive"])
+        trace.append({"round": 0, "tool": "去重", "args": {},
+                      "summary": "去掉 %d 个被更具体写法覆盖的 tag：%s"
+                                 % (len(dropped), "、".join(dropped[:6]))})
+        say("去重：去掉 %d 个被更具体写法覆盖的 tag" % len(dropped), 65.8)
     if plan_info:
         out["plan"] = plan_info
     if reflect and int(reflect_rounds or 0) > 0:
@@ -635,7 +646,11 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
         pool_tags = []
         pool_seed = []
         if concept_map and concept_injected:
-            pool_seed.extend(c.get("tag") for c in (concept_map.get("confirmed") or []))
+            for c in (concept_map.get("confirmed") or []):
+                pool_seed.append(c.get("tag"))
+                # 角色还要带上作品 tag：Danbooru 里两者成对出现才稳
+                if c.get("series"):
+                    pool_seed.append(c.get("series"))
         pool_seed.extend(prefetch_tags)
         if pool_seed:
             try:
@@ -664,6 +679,13 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
             say("自省没跑完：%s" % e)
     # 自省可能改过正向列表：最终再排一次，保证任何路径出来的顺序都一致
     out["positive"] = reorder_hits(out["positive"])
+    # 自省修复可能又把「thighhighs + white_thighhighs」这类近义写法带回来，再清一次
+    out["positive"], dropped2 = dedupe_near_duplicates(out["positive"])
+    if dropped2:
+        out["positive"] = reorder_hits(out["positive"])
+        trace.append({"round": 0, "tool": "去重", "args": {},
+                      "summary": "去掉 %d 个被更具体写法覆盖的 tag：%s"
+                                 % (len(dropped2), "、".join(dropped2[:6]))})
     # 构图冲突：留白与广角/全身同时出现会把画面抵消掉 —— 留白降级成候选，不进正向
     keep, moved = resolve_negative_space_conflict(out["positive"])
     if moved:
@@ -680,8 +702,32 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
         trace.append(entry)
     # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
     out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
+    # 开了结构校验（reflect）时，结果里不留「未识别」项：
+    # 这些 tag 本来就没进正向（词表校验不通过），再挂在结果栏里只是噪声；
+    # 数量记进 stats 供排查，不静默丢数据。
+    if reflect and out.get("positive_unknown"):
+        stats["unknown_dropped"] = len(out["positive_unknown"])
+        out["positive_unknown"] = []
     say("完成：正向 %d 个" % len(out["positive"]), 97)
     return out
+
+
+def extract_concepts(text):
+    """本地概念抽取：词表中文索引 + 角色库，合并后角色排前面。
+
+    抽成了独立函数，因为**单次生成也要用同一套**（以前单次那条路只调
+    local_concepts，而词表中文索引故意排除了角色分类，所以「初音未来」在
+    单次生成里永远抽不出来，角色库等于只在 Agent 模式生效）。
+    """
+    concepts = local_concepts(text)
+    try:
+        chars = [c for c, _tag in character_db.extract(text, limit=3)]
+    except Exception:  # noqa: BLE001 - 角色库坏了不影响普通概念
+        chars = []
+    if chars:
+        seen = set(concepts)
+        concepts = chars + [c for c in concepts if c not in seen]
+    return concepts
 
 
 def _stage_concepts(text, natural, say, trace, stats, system):
@@ -690,7 +736,7 @@ def _stage_concepts(text, natural, say, trace, stats, system):
     injected = False
     if natural:
         return concept_map, injected, system
-    concepts = local_concepts(text)          # 纯本地抽取，不调模型、不查网络
+    concepts = extract_concepts(text)        # 纯本地抽取，不调模型、不查网络
     if concepts:
         mapping = map_concepts(concepts)
         concept_map = mapping
@@ -723,6 +769,10 @@ def _stage_fallback_prefetch(cfg, text, model, natural, fallback, compress,
         if fallback:
             try:
                 miss = uncovered_words(text, concept_map)
+                # 这一步要真的问一次模型（几秒到十几秒），先说一声，
+                # 否则界面停在「概念核对」看起来像卡死。
+                if len(miss) >= 2 and pending_words(miss):
+                    say("未命中词兜底：%d 个，正在查词表…" % len(miss), 35)
                 fallback_pairs = batch_fallback_words(cfg, miss, model, stats)
             except Exception:  # noqa: BLE001 - 兜底失败照常生成
                 fallback_pairs = []
@@ -801,6 +851,8 @@ def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature
                      compressed, say, trace, stats, call_no, gen_pct):
     """工具调用循环（含不支持 tools 时自动降级）。返回 (parsed, content, tools_ok)。"""
     parsed, content = None, ""
+    tried = set()          # 已经做过的 (工具名, 参数)，用来识别重复查询
+    futile_rounds = 0      # 连续多少轮工具什么都没查到
     for rnd in range(1, max_r + 1):
         payload = {"model": model, "messages": messages,
                    "temperature": float(temperature), "stream": False}
@@ -865,6 +917,25 @@ def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature
             continue
 
         # 记录了工具调用：先回填 assistant 消息，再逐个执行
+        # 如果这一轮要做的查询和以前一模一样，说明再查也不会有新信息 ——
+        # 停用工具、让它直接产出结果（省掉后面几轮模型调用，这是"轮数到 6"的主因）。
+        keys = []
+        for c in calls:
+            fn0 = c.get("function") or {}
+            keys.append((str(fn0.get("name") or ""),
+                         str(fn0.get("arguments") or "")))
+        if keys and all(k in tried for k in keys):
+            tools_ok = False
+            trace.append({"round": rnd, "tool": "停用工具", "args": {},
+                          "summary": "%d 个查询和之前重复，已停用工具直接出结果" % len(keys)})
+            say("这轮查询和之前完全重复，不再查词，直接让它输出结果", gen_pct(0.8))
+            messages.append({"role": "user",
+                             "content": "上面这些查询已经做过了，结果没有变化；不要再调用工具，"
+                                        "直接按约定格式输出最终 JSON。"})
+            continue
+        for k in keys:
+            tried.add(k)
+        round_briefs = []
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": calls})
         for k, c in enumerate(calls):
@@ -876,6 +947,7 @@ def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature
                 fargs = {}
             out, brief = run_tool(fname, fargs)
             stats["tool_calls"] += 1
+            round_briefs.append(brief)
             trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
             messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
                              "content": out})
@@ -883,19 +955,35 @@ def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature
             say("执行工具 %d/%d（%s）：%s" % (k + 1, len(calls), fname, brief),
                 gen_pct(0.5 + 0.45 * (k + 1) / max(1, len(calls))))
 
+        # 连续两轮工具都没查到任何东西（全是「无结果 / 不存在」）→ 再查也是白烧调用，
+        # 停用工具让它直接产出结果。这是"轮数一到 6 就慢"的另一个来源。
+        # 连续两轮「查词都没结果」（search 全空）→ 再查也是白烧调用，停用工具。
+        # 只把 "无结果" 算作无效：validate_tags 的「有 N 个不存在」是有效信息，不算。
+        if calls and round_briefs and all("无结果" in str(b) for b in round_briefs):
+            futile_rounds += 1
+        else:
+            futile_rounds = 0
+        if futile_rounds >= 2 and tools_ok:
+            tools_ok = False
+            trace.append({"round": rnd, "tool": "停用工具", "args": {},
+                          "summary": "连续 %d 轮工具都没查到结果，已停用工具直接出结果" % futile_rounds})
+            say("连续两轮查词都没有结果，不再调用工具，直接让它输出结果", gen_pct(0.85))
+            messages.append({"role": "user",
+                             "content": "查词一直没有结果，不用再查了；直接按约定格式输出最终 JSON。"})
+
     return parsed, content, tools_ok
 
 
 def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
                    max_rounds=6, reflect=True, reflect_rounds=2, use_tools=True,
                    progress=None, prompt_model=DEFAULT_MODEL, system_prompt="", plan=False,
-                   aux_model="", fallback=True, compress=True, emit=None):
+                   fallback=True, compress=True, emit=None):
     """带工具调用的智能体循环 + 自省重写。返回结构化结果（含轨迹与评审记录）。
 
     progress 是个可选回调：每走一步就调一次，用来在界面上显示实时进度。
     tag 模式始终做概念核对（没有开关）：进查词循环前用本地词表索引抽概念
     （dict_db.local_concepts，纯本地、不额外调模型），映射后确认 ≥3 个才注入。
-    aux_model 非空时，规划 / 评审这些辅助步骤用它，生成仍用主模型。
+    全程只用 cfg["model"] 一个模型：规划、工具轮、评审都是它。
     """
     def say(msg, pct=None):
         if progress:
@@ -909,11 +997,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
             except Exception:  # noqa: BLE001
                 pass
 
-    if aux_model:
-        cfg = dict(cfg)
-        cfg["aux_model"] = str(aux_model).strip()
     model = (cfg.get("model") or "").strip()
-    aux = (cfg.get("aux_model") or "").strip() or model
 
     prof = get_model(prompt_model)
     natural = prof["mode"] == "natural"
@@ -963,7 +1047,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
     # 概念核对（tag 模式始终开启）/ 规划展示（默认关）：
     #   · 概念核对完全本地：进查词循环前用词表中文索引做最长匹配（dict_db.local_concepts），
     #     再走 map_concepts 映射；不调模型、不占调用数，也不用等第一轮回填。
-    #   · 规划展示仍然要一次模型调用（开了才有，用 aux 模型）；计划预查照旧纯本地。
+    #   · 规划展示仍然要一次模型调用（开了才有，和生成用同一个模型）；计划预查照旧纯本地。
     # 失败只记轨迹并降级，生成照常继续。
     plan_info = None
     concept_map = None
@@ -975,7 +1059,7 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
         stats["concepts_unknown"] = 0
     if plan:
         plan_info, system, prefetch_tags = _stage_plan(
-            cfg, text, natural, temperature, aux, emit, say, trace, stats, system)
+            cfg, text, natural, temperature, model, emit, say, trace, stats, system)
     concept_map, concept_injected, system = _stage_concepts(
         text, natural, say, trace, stats, system)
     system, prefetch_tags, compressed = _stage_fallback_prefetch(
@@ -1029,7 +1113,36 @@ def agent_generate(cfg, text, extra_rules="", max_tags=45, temperature=0.6,
 # 评分与本地规则校验已拆到 scoring.py；这里转发名字，调用方不用改
 from scoring import (KREA_DIM_WEIGHTS, TAG_DIM_WEIGHTS, _clamp_dim,  # noqa: E402
                      _normalize_dimensions, _review_score, _score_from_dimensions,
-                     rule_score)
+                     dedupe_near_duplicates, rule_score)
+
+
+def _fill_missing_concepts(result, concept_map, max_tags=45):
+    """把「概念核对已确认、但正向里没有」的 tag 直接补进正向（纯本地，不调模型）。
+
+    概念覆盖不足是确定性信息：少哪个 tag 是知道的，没必要花一次模型调用去"修"。
+    返回补进去的个数（0 表示没有可补的）。
+    """
+    have = {str(h.get("tag") or "").strip().lower() for h in (result.get("positive") or [])}
+    want = []
+    for c in (concept_map or {}).get("confirmed") or []:
+        t = str(c.get("tag") or "").strip().lower()
+        if t and t not in have and t not in want:
+            want.append(t)
+        # 角色命中时作品 tag 一起补：只有角色没有作品，图库里容易画成「像但不是」
+        s = str(c.get("series") or "").strip().lower()
+        if s and s not in have and s not in want:
+            want.append(s)
+    if not want:
+        return 0
+    valid, _unknown = validate_tags(want)
+    if not valid:
+        return 0
+    hits = list(result.get("positive") or []) + valid
+    hits = reorder_hits(hits)
+    if max_tags and len(hits) > int(max_tags):
+        hits = hits[:int(max_tags)]
+    result["positive"] = hits
+    return len(valid)
 
 
 def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD, progress=None,
@@ -1054,7 +1167,7 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD,
             except TypeError:
                 progress(msg)
 
-    model = (cfg.get("aux_model") or "").strip() or (cfg.get("model") or "").strip()
+    model = (cfg.get("model") or "").strip()
 
     def evaluate():
         return rule_score(text, result["positive"],
@@ -1081,10 +1194,43 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD,
                 "picked_round": 1, "candidates": len(result.get("positive_candidates") or []),
                 "iterations": 1, "mode": "rules", "gate": True}
     if not problems:
-        say("结构校验通过：%d 分" % score, 95)
+        # 分没到阈值、但评分没给出任何「可修」的具体问题 —— 没有可修的东西。
+        # 以前这里会补一条空泛的问题把模型再叫一轮，实测那一轮几乎不涨分
+        # （常常 94→93 回滚），白烧 ~11 秒。现在直接按当前结果采纳收工。
+        say("结构校验：%d 分（没有具体问题可修，直接采纳）" % score, 95)
         return {"rounds": history, "final_score": score, "final_dims": dims,
                 "picked_round": 1, "candidates": len(result.get("positive_candidates") or []),
                 "iterations": 1, "mode": "rules", "gate": gate}
+
+    # 覆盖不足是确定性信息（少哪个已确认 tag 是知道的），先本地补——不花模型调用。
+    # 这样 93 分基本当场变 100 分，不会为了一个能直接补的 tag 多跑一轮修复（那正是
+    # 「生成变慢」的来源）。
+    if concept_map and any(str(p).startswith("要素覆盖不足") or str(p).startswith("缺要素")
+                           for p in problems):
+        added = _fill_missing_concepts(result, concept_map, max_tags)
+        if added:
+            score2, dims2, problems2 = evaluate()
+            gate2 = _gate_ok(dims2)
+            rnd = len(history) + 1
+            history.append({"round": rnd, "score": score2, "dimensions": dims2,
+                            "gate": gate2, "problems": problems2, "missing": [],
+                            "changed": added,
+                            "candidates": len(result.get("positive_candidates") or []),
+                            "add_concepts": []})
+            say("本地补齐 %d 个已确认概念 tag → %d 分" % (added, score2), 92)
+            cur_round = {"score": score2, "round": rnd, "dimensions": dims2,
+                         "positive": result["positive"], "gate": gate2}
+            if score2 > best_any["score"]:
+                best_any = cur_round
+            if gate2 and (best_gate is None or score2 > best_gate["score"]):
+                best_gate = cur_round
+            if score2 >= threshold and gate2:
+                say("结构校验通过：%d 分（本地补齐概念后达标）" % score2, 95)
+                return {"rounds": history, "final_score": score2, "final_dims": dims2,
+                        "picked_round": rnd,
+                        "candidates": len(result.get("positive_candidates") or []),
+                        "iterations": len(history), "mode": "rules", "gate": True}
+            score, dims, problems = score2, dims2, problems2
 
     # 规则没过：最多修 rounds 轮，中途「没提升」或「满分」都会提前停
     max_repairs = max(0, int(rounds))
@@ -1180,7 +1326,7 @@ def self_refine_natural(cfg, text, result, rounds=2, threshold=95, progress=None
             except Exception:  # noqa: BLE001
                 pass
 
-    model = (cfg.get("aux_model") or "").strip() or (cfg.get("model") or "").strip()
+    model = (cfg.get("model") or "").strip()
     history = []
     rounds = max(1, int(rounds))
     # 多轮评审里分数可能回落，最后采用「得分最高」的那一轮提示词
