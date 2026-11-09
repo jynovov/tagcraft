@@ -601,6 +601,89 @@ def _stage_plan(cfg, text, natural, temperature, model, emit, say, trace, stats,
     return plan_info, system, prefetch_tags
 
 
+def _build_reflect_pool(concept_map, concept_injected, prefetch_tags):
+    """可新增池：概念核对确认的 tag（含角色作品）+ 计划预查命中的 tag。
+
+    概念只在「确认 ≥3 个、真的注入了」时才进池：本地抽取有时只命中一两个词，
+    这时如果还拿它框住自省，模型想补的 tag 会全被挤进候选，反而更差。
+    纯本地，不调模型。
+    """
+    pool_seed = []
+    if concept_map and concept_injected:
+        for c in (concept_map.get("confirmed") or []):
+            pool_seed.append(c.get("tag"))
+            # 角色还要带上作品 tag：Danbooru 里两者成对出现才稳
+            if c.get("series"):
+                pool_seed.append(c.get("series"))
+    pool_seed.extend(prefetch_tags)
+    if not pool_seed:
+        return []
+    try:
+        return build_add_pool(pool_seed)
+    except Exception:  # noqa: BLE001 - 池建不出来就退回旧行为
+        return []
+
+
+def _reflect_tag_result(cfg, text, out, reflect_rounds, pool_tags,
+                        concept_map, max_tags, say):
+    """在已校验的结果上跑规则自省，把结果与统计回写进 out。"""
+    try:
+        out["review"] = self_refine_rules(
+            cfg, text, out, rounds=reflect_rounds, threshold=_REFLECT_THRESHOLD,
+            progress=say, pool=pool_tags, concept_map=concept_map, max_tags=max_tags)
+        # 自省后重新校验一遍
+        pos2 = [h["tag"] for h in out["positive"]]
+        valid2, unknown2 = validate_tags(pos2)
+        out["positive"], out["positive_unknown"] = valid2, unknown2
+        out["positive"] = reorder_hits(out["positive"])
+        # 候选补充：已经进了正向的就不再重复展示
+        pos_low = {str(h.get("tag") or "").lower() for h in out["positive"]}
+        cands = [c for c in (out.get("positive_candidates") or [])
+                 if str((c or {}).get("tag") or "").lower() not in pos_low]
+        out["positive_candidates"] = reorder_hits(cands)
+        out["stats"]["candidates"] = len(out["positive_candidates"])
+        out["stats"]["checked"] = len(pos2)
+        out["stats"]["unknown"] = len(unknown2)
+    except Exception as e:  # noqa: BLE001
+        out["review"] = {"error": str(e), "rounds": []}
+        say("自省没跑完：%s" % e)
+
+
+def _apply_structure_fixes(out, text, trace, stats, reflect):
+    """自省之后的收尾：近义去重 → 构图冲突 → 框架补全 → 未识别项清理。"""
+    # 自省可能改过正向列表：最终再排一次，保证任何路径出来的顺序都一致
+    out["positive"] = reorder_hits(out["positive"])
+    # 自省修复可能又把「thighhighs + white_thighhighs」这类近义写法带回来，再清一次
+    out["positive"], dropped2 = dedupe_near_duplicates(out["positive"])
+    if dropped2:
+        out["positive"] = reorder_hits(out["positive"])
+        trace.append({"round": 0, "tool": "去重", "args": {},
+                      "summary": "去掉 %d 个被更具体写法覆盖的 tag：%s"
+                                 % (len(dropped2), "、".join(dropped2[:6]))})
+    # 构图冲突：留白与广角/全身同时出现会把画面抵消掉 —— 留白降级成候选，不进正向
+    keep, moved = resolve_negative_space_conflict(out["positive"])
+    if moved:
+        out["positive"] = keep
+        out["positive_candidates"] = reorder_hits(
+            list(out.get("positive_candidates") or []) + moved)
+        trace.append(negative_space_conflict_trace())
+        out["stats"]["candidates"] = len(out["positive_candidates"])
+    # 框架补全：人数 / 景别 / 质量词（本地规则，不调模型）
+    out["positive"], frame_added = ensure_frame(out["positive"], text)
+    out["positive"] = reorder_hits(out["positive"])   # 质量词固定在最前、人数在人物之前
+    entry = frame_trace(frame_added)
+    if entry:
+        trace.append(entry)
+    # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
+    out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
+    # 开了结构校验（reflect）时，结果里不留「未识别」项：
+    # 这些 tag 本来就没进正向（词表校验不通过），再挂在结果栏里只是噪声；
+    # 数量记进 stats 供排查，不静默丢数据。
+    if reflect and out.get("positive_unknown"):
+        stats["unknown_dropped"] = len(out["positive_unknown"])
+        out["positive_unknown"] = []
+
+
 def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
                   reflect, reflect_rounds, say, concept_map, concept_injected,
                   prefetch_tags, max_tags):
@@ -639,75 +722,10 @@ def _finalize_tag(cfg, text, parsed, content, trace, stats, tools_ok, plan_info,
         out["plan"] = plan_info
     if reflect and int(reflect_rounds or 0) > 0:
         say("进入自省环节：先本地规则打分", 66)
-        # 可新增池：概念核对已确认的 tag + 计划预查命中的 tag + 相近候选
-        # （三者同级；纯本地，不调模型）
-        # 概念只在「确认 ≥3 个、真的注入了」时才进池：本地抽取有时只命中一两个词，
-        # 这时如果还拿它框住自省，模型想补的 tag 会全被挤进候选，反而更差。
-        pool_tags = []
-        pool_seed = []
-        if concept_map and concept_injected:
-            for c in (concept_map.get("confirmed") or []):
-                pool_seed.append(c.get("tag"))
-                # 角色还要带上作品 tag：Danbooru 里两者成对出现才稳
-                if c.get("series"):
-                    pool_seed.append(c.get("series"))
-        pool_seed.extend(prefetch_tags)
-        if pool_seed:
-            try:
-                pool_tags = build_add_pool(pool_seed)
-            except Exception:  # noqa: BLE001 - 池建不出来就退回旧行为
-                pool_tags = []
-        try:
-            out["review"] = self_refine_rules(
-                cfg, text, out, rounds=reflect_rounds, threshold=_REFLECT_THRESHOLD, progress=say,
-                pool=pool_tags, concept_map=concept_map, max_tags=max_tags)
-            # 自省后重新校验一遍
-            pos2 = [h["tag"] for h in out["positive"]]
-            valid2, unknown2 = validate_tags(pos2)
-            out["positive"], out["positive_unknown"] = valid2, unknown2
-            out["positive"] = reorder_hits(out["positive"])
-            # 候选补充：已经进了正向的就不再重复展示
-            pos_low = {str(h.get("tag") or "").lower() for h in out["positive"]}
-            cands = [c for c in (out.get("positive_candidates") or [])
-                     if str((c or {}).get("tag") or "").lower() not in pos_low]
-            out["positive_candidates"] = reorder_hits(cands)
-            out["stats"]["candidates"] = len(out["positive_candidates"])
-            out["stats"]["checked"] = len(pos2)
-            out["stats"]["unknown"] = len(unknown2)
-        except Exception as e:  # noqa: BLE001
-            out["review"] = {"error": str(e), "rounds": []}
-            say("自省没跑完：%s" % e)
-    # 自省可能改过正向列表：最终再排一次，保证任何路径出来的顺序都一致
-    out["positive"] = reorder_hits(out["positive"])
-    # 自省修复可能又把「thighhighs + white_thighhighs」这类近义写法带回来，再清一次
-    out["positive"], dropped2 = dedupe_near_duplicates(out["positive"])
-    if dropped2:
-        out["positive"] = reorder_hits(out["positive"])
-        trace.append({"round": 0, "tool": "去重", "args": {},
-                      "summary": "去掉 %d 个被更具体写法覆盖的 tag：%s"
-                                 % (len(dropped2), "、".join(dropped2[:6]))})
-    # 构图冲突：留白与广角/全身同时出现会把画面抵消掉 —— 留白降级成候选，不进正向
-    keep, moved = resolve_negative_space_conflict(out["positive"])
-    if moved:
-        out["positive"] = keep
-        out["positive_candidates"] = reorder_hits(
-            list(out.get("positive_candidates") or []) + moved)
-        trace.append(negative_space_conflict_trace())
-        out["stats"]["candidates"] = len(out["positive_candidates"])
-    # 框架补全：人数 / 景别 / 质量词（本地规则，不调模型）
-    out["positive"], frame_added = ensure_frame(out["positive"], text)
-    out["positive"] = reorder_hits(out["positive"])   # 质量词固定在最前、人数在人物之前
-    entry = frame_trace(frame_added)
-    if entry:
-        trace.append(entry)
-    # 自省可能改过正向列表：最终 parsed 里也只留确认过的 tag
-    out["parsed"]["positive"] = [h["tag"] for h in out["positive"]]
-    # 开了结构校验（reflect）时，结果里不留「未识别」项：
-    # 这些 tag 本来就没进正向（词表校验不通过），再挂在结果栏里只是噪声；
-    # 数量记进 stats 供排查，不静默丢数据。
-    if reflect and out.get("positive_unknown"):
-        stats["unknown_dropped"] = len(out["positive_unknown"])
-        out["positive_unknown"] = []
+        pool_tags = _build_reflect_pool(concept_map, concept_injected, prefetch_tags)
+        _reflect_tag_result(cfg, text, out, reflect_rounds, pool_tags,
+                            concept_map, max_tags, say)
+    _apply_structure_fixes(out, text, trace, stats, reflect)
     say("完成：正向 %d 个" % len(out["positive"]), 97)
     return out
 
@@ -847,6 +865,29 @@ def _finalize_natural(cfg, text, parsed, content, trace, stats, tools_ok, plan_i
 
 
 
+def _exec_tool_calls(rnd, content, calls, messages, trace, stats, say, gen_pct):
+    """执行一轮工具调用：回填 assistant / tool 消息，返回每次调用的一句话简述。"""
+    messages.append({"role": "assistant", "content": content, "tool_calls": calls})
+    briefs = []
+    for k, c in enumerate(calls):
+        fn = c.get("function") or {}
+        fname = str(fn.get("name") or "")
+        try:
+            fargs = json.loads(fn.get("arguments") or "{}")
+        except Exception:
+            fargs = {}
+        out, brief = run_tool(fname, fargs)
+        stats["tool_calls"] += 1
+        briefs.append(brief)
+        trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
+        messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
+                         "content": out})
+        # 一轮里可能有好几个工具调用，逐个推进百分比
+        say("执行工具 %d/%d（%s）：%s" % (k + 1, len(calls), fname, brief),
+            gen_pct(0.5 + 0.45 * (k + 1) / max(1, len(calls))))
+    return briefs
+
+
 def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature,
                      compressed, say, trace, stats, call_no, gen_pct):
     """工具调用循环（含不支持 tools 时自动降级）。返回 (parsed, content, tools_ok)。"""
@@ -935,25 +976,8 @@ def _stage_tool_loop(cfg, model, messages, natural, tools_ok, max_r, temperature
             continue
         for k in keys:
             tried.add(k)
-        round_briefs = []
-        messages.append({"role": "assistant", "content": msg.get("content") or "",
-                         "tool_calls": calls})
-        for k, c in enumerate(calls):
-            fn = (c.get("function") or {})
-            fname = str(fn.get("name") or "")
-            try:
-                fargs = json.loads(fn.get("arguments") or "{}")
-            except Exception:
-                fargs = {}
-            out, brief = run_tool(fname, fargs)
-            stats["tool_calls"] += 1
-            round_briefs.append(brief)
-            trace.append({"round": rnd, "tool": fname, "args": fargs, "summary": brief})
-            messages.append({"role": "tool", "tool_call_id": c.get("id") or fname,
-                             "content": out})
-            # 一轮里可能有好几个工具调用，逐个推进百分比
-            say("执行工具 %d/%d（%s）：%s" % (k + 1, len(calls), fname, brief),
-                gen_pct(0.5 + 0.45 * (k + 1) / max(1, len(calls))))
+        round_briefs = _exec_tool_calls(rnd, msg.get("content") or "", calls,
+                                        messages, trace, stats, say, gen_pct)
 
         # 连续两轮工具都没查到任何东西（全是「无结果 / 不存在」）→ 再查也是白烧调用，
         # 停用工具让它直接产出结果。这是"轮数一到 6 就慢"的另一个来源。
@@ -1145,6 +1169,63 @@ def _fill_missing_concepts(result, concept_map, max_tags=45):
     return len(valid)
 
 
+def _ask_repair(cfg, model, text, cur, problems, pool):
+    """发一轮修复请求，返回模型给的新正向列表；没给列表时返回空列表。
+
+    _post_chat 是模块级名字，测试打桩照样生效。
+    """
+    rule = ("【修复要求】只改下面列出的问题；其余 tag 原样保留、顺序不变；"
+            "如需新增 tag，只能从【可新增池】里选。\n\n"
+            "问题：\n- " + "\n- ".join(problems[:8]) + "\n\n请输出 JSON。")
+    ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n%s%s"
+           % (text, ", ".join(cur), add_pool_prompt_block(pool or []), rule))
+    body = _post_chat(cfg, {"model": model,
+                            "messages": [{"role": "system", "content": CRITIC_SYSTEM},
+                                         {"role": "user", "content": ask}],
+                            "temperature": _REFLECT_TEMPERATURE, "stream": False},
+                      retries=2)
+    content = body["choices"][0]["message"].get("content") or ""
+    crit = _extract_json(content)
+    return [str(t).strip() for t in ((crit or {}).get("positive") or [])
+            if str(t).strip()]
+
+
+def _try_fill_missing(result, concept_map, max_tags, problems, evaluate, threshold,
+                      history, best_any, best_gate, say):
+    """覆盖不足时先本地补齐（不花模型调用）。
+
+    93 分基本当场变 100 分，不会为了一个能直接补的 tag 多跑一轮修复。
+    返回 (score, dims, problems, best_any, best_gate, done)；
+    done 非空表示已经达标收敛，调用方直接返回它。
+    """
+    added = _fill_missing_concepts(result, concept_map, max_tags)
+    if not added:
+        return None, None, None, best_any, best_gate, None
+    score2, dims2, problems2 = evaluate()
+    gate2 = _gate_ok(dims2)
+    rnd = len(history) + 1
+    history.append({"round": rnd, "score": score2, "dimensions": dims2,
+                    "gate": gate2, "problems": problems2, "missing": [],
+                    "changed": added,
+                    "candidates": len(result.get("positive_candidates") or []),
+                    "add_concepts": []})
+    say("本地补齐 %d 个已确认概念 tag → %d 分" % (added, score2), 92)
+    cur_round = {"score": score2, "round": rnd, "dimensions": dims2,
+                 "positive": result["positive"], "gate": gate2}
+    if score2 > best_any["score"]:
+        best_any = cur_round
+    if gate2 and (best_gate is None or score2 > best_gate["score"]):
+        best_gate = cur_round
+    if score2 >= threshold and gate2:
+        say("结构校验通过：%d 分（本地补齐概念后达标）" % score2, 95)
+        done = {"rounds": history, "final_score": score2, "final_dims": dims2,
+                "picked_round": rnd,
+                "candidates": len(result.get("positive_candidates") or []),
+                "iterations": len(history), "mode": "rules", "gate": True}
+        return score2, dims2, problems2, best_any, best_gate, done
+    return score2, dims2, problems2, best_any, best_gate, None
+
+
 def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD, progress=None,
                       pool=None, concept_map=None, max_tags=45):
     """规则自省：先本地打分，规则没过就修，最多修 rounds 轮。
@@ -1203,34 +1284,15 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD,
                 "iterations": 1, "mode": "rules", "gate": gate}
 
     # 覆盖不足是确定性信息（少哪个已确认 tag 是知道的），先本地补——不花模型调用。
-    # 这样 93 分基本当场变 100 分，不会为了一个能直接补的 tag 多跑一轮修复（那正是
-    # 「生成变慢」的来源）。
     if concept_map and any(str(p).startswith("要素覆盖不足") or str(p).startswith("缺要素")
                            for p in problems):
-        added = _fill_missing_concepts(result, concept_map, max_tags)
-        if added:
-            score2, dims2, problems2 = evaluate()
-            gate2 = _gate_ok(dims2)
-            rnd = len(history) + 1
-            history.append({"round": rnd, "score": score2, "dimensions": dims2,
-                            "gate": gate2, "problems": problems2, "missing": [],
-                            "changed": added,
-                            "candidates": len(result.get("positive_candidates") or []),
-                            "add_concepts": []})
-            say("本地补齐 %d 个已确认概念 tag → %d 分" % (added, score2), 92)
-            cur_round = {"score": score2, "round": rnd, "dimensions": dims2,
-                         "positive": result["positive"], "gate": gate2}
-            if score2 > best_any["score"]:
-                best_any = cur_round
-            if gate2 and (best_gate is None or score2 > best_gate["score"]):
-                best_gate = cur_round
-            if score2 >= threshold and gate2:
-                say("结构校验通过：%d 分（本地补齐概念后达标）" % score2, 95)
-                return {"rounds": history, "final_score": score2, "final_dims": dims2,
-                        "picked_round": rnd,
-                        "candidates": len(result.get("positive_candidates") or []),
-                        "iterations": len(history), "mode": "rules", "gate": True}
-            score, dims, problems = score2, dims2, problems2
+        s2, d2, p2, best_any, best_gate, done = _try_fill_missing(
+            result, concept_map, max_tags, problems, evaluate, threshold,
+            history, best_any, best_gate, say)
+        if done:
+            return done
+        if s2 is not None:
+            score, dims, problems = s2, d2, p2
 
     # 规则没过：最多修 rounds 轮，中途「没提升」或「满分」都会提前停
     max_repairs = max(0, int(rounds))
@@ -1238,26 +1300,12 @@ def self_refine_rules(cfg, text, result, rounds=2, threshold=_REFLECT_THRESHOLD,
         rnd = len(history) + 1
         cur = [h["tag"] for h in result["positive"]]
         say("规则没过（%d 条问题），第 %d 轮修复…" % (len(problems), rnd - 1), 78)
-        rule = ("【修复要求】只改下面列出的问题；其余 tag 原样保留、顺序不变；"
-                "如需新增 tag，只能从【可新增池】里选。\n\n"
-                "问题：\n- " + "\n- ".join(problems[:8]) + "\n\n请输出 JSON。")
-        ask = ("【中文描述】\n%s\n\n【当前正向 tag（按顺序）】\n%s\n\n%s%s"
-               % (text, ", ".join(cur), add_pool_prompt_block(pool or []), rule))
         try:
-            body = _post_chat(cfg, {"model": model,
-                                    "messages": [{"role": "system", "content": CRITIC_SYSTEM},
-                                                 {"role": "user", "content": ask}],
-                                    "temperature": _REFLECT_TEMPERATURE, "stream": False},
-                              retries=2)
-            content = body["choices"][0]["message"].get("content") or ""
+            new_pos = _ask_repair(cfg, model, text, cur, problems, pool)
         except Exception as e:  # noqa: BLE001 - 修复失败不影响已有结果
             say("修复调用失败：%s" % e, 95)
             break
         result["stats"]["llm_calls"] = result["stats"].get("llm_calls", 0) + 1
-
-        crit = _extract_json(content)
-        new_pos = [str(t).strip() for t in ((crit or {}).get("positive") or [])
-                   if str(t).strip()]
         if not new_pos:
             say("第 %d 轮修复没有给出正向列表，结束自省" % (rnd - 1), 95)
             break
