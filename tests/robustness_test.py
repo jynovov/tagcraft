@@ -231,7 +231,11 @@ def main():
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "server.py"),
          "--port", str(PORT), "--no-browser", "--no-update"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # 隔离配置：指向不存在的路径 → 全默认（api_key 为空），不受真实 config.json 影响
+        env=dict(os.environ, TAGCRAFT_NO_CACHE="1",
+                 TAGCRAFT_CONFIG=os.path.join(os.environ.get("TEMP", "/tmp"),
+                                              "tagcraft-test-empty.json")))
     try:
         if not wait_ready(proc):
             print("服务没起来，后面的 HTTP 用例全跳过（可能端口被占）")

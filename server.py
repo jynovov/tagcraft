@@ -23,7 +23,7 @@ import job_store
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from common import DATA_DIR, ROOT, as_int, load_config, log
+from common import DATA_DIR, ROOT, as_bool, as_int, load_config, log, save_config
 
 from dict_db import CATEGORY_NAMES, DEFAULT_SOURCE, SEED_PATH, SOURCES, dict_count, dict_meta, download_dict, import_csv, local_concepts, search_tags, suggest_for, validate_tags
 from prompts import DEFAULT_NEGATIVE, DEFAULT_QUALITY, TAG_CN
@@ -258,6 +258,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             return self._send(200, {"ok": True, "reply": (reply or "ok").strip()[:40]})
 
+        if path == "/api/config":
+            # 把 Key / 地址 / 模型写进后端 config.json（前端不再存 Key）。
+            # 只允许本机回环 + 同源，避免随便一个网页改掉你的配置。
+            if not self._loopback_bound():
+                return self._send(403, {"error": "服务不在本机回环地址上，已拒绝写配置"})
+            if not self._same_origin():
+                return self._send(403, {"error": "跨站请求不能写配置"})
+            patch = {}
+            for k in ("api_key", "api_base", "model", "proxy"):
+                v = body.get(k)
+                if isinstance(v, str):
+                    patch[k] = v.strip()
+            if "timeout" in body:
+                patch["timeout"] = as_int(body.get("timeout"), 120, 5, 600)
+            if "use_cache" in body:
+                patch["use_cache"] = as_bool(body.get("use_cache"), True)
+            try:
+                save_config(patch)
+            except Exception as e:  # noqa: BLE001
+                return self._send(500, {"error": "写入配置失败：%s" % e})
+            cfg2 = load_config()
+            return self._send(200, {"ok": True,
+                                    "configured": bool((cfg2.get("api_key") or "").strip()),
+                                    "model": cfg2.get("model", "")})
+
         if path == "/api/shutdown":
             # 关服务是不可逆操作：只允许「本机回环 + 同源页面」发起。
             # 跨站页面（哪怕只是本地随便一个网页）以前一个 POST 就能把它关掉。
@@ -311,6 +336,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/reflect":
             return gen_service.reflect(body, self._send)
+
+        if path == "/api/translate":
+            # Krea 页的「译成中文」：只读展示，不改提示词、不写历史
+            return gen_service.translate(body, self._send)
 
         if path == "/api/agent":
             return gen_service.agent(body, self._send)

@@ -15,27 +15,27 @@ launcher.ini
 # ---- ä¸´æ—¶ / è°ƒè¯•æ–‡ä»¶ ----
 launcher.log
 *.log
+*.err
 __pycache__/
 *.py[cod]
 _o.txt
 _e.txt
 _acceptance_test.py
 _final_test.py
+mock_llm_calls.json
+
+# ---- æœ¬æœºäº¤æ¥è®°å¿†ï¼ˆå«æœ¬æœºç»å¯¹è·¯å¾„ä¸ä¸ªäººåå¥½ï¼Œä¸è¿›ä»“åº“ï¼‰----
+MEMORY.md
+
+# ---- è¿è¡ŒæœŸæ•°æ®ï¼ˆå¯é‡å»ºï¼Œå« API Key é£é™©ï¼‰----
+data/_*
+data/jobs.json
+data/.jobs-*.tmp
+data/fallback_cache.json
+data/tagcraft.log.1
+
+# ---- è¯„æµ‹äº§ç‰©ï¼ˆå¯èƒ½å« API Keyï¼‰----
+eval/runs/
 
 # ---- ä¾èµ–æ–‡ä»¶å±æ€§æ‰ç”Ÿæ•ˆçš„æ–‡ä»¶å¤¹å›¾æ ‡é…ç½®ï¼Œclone åä¸ä¼šèµ·ä½œç”¨ ----
 desktop.ini
-
-# ²âÊÔ/µ÷ÊÔÊ±²úÉúµÄ stderr ÈÕÖ¾
-*.err
-
-# µ÷ÊÔÊ±²úÉúµÄÁÙÊ±ÎÄ¼ş
-data/_*
-
-mock_llm_calls.json
-
-# ÈÎÎñ¼ì²éµã£¨ÔËĞĞÊ±Éú³É£¬²»Ìá½»£©
-data/jobs.json
-data/.jobs-*.tmp
-
-# ÅÜ·Ö¼ÇÂ¼£¨¿ÉÄÜ»ØÏÔ API Key£¬²»Ìá½»£©
-eval/runs/
